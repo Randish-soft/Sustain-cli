@@ -1,147 +1,108 @@
-import { promisify } from "util";
-import { exec as execCb } from "child_process";
-import * as fs from "fs/promises";
-import * as path from "path";
+import { exec } from 'child_process';
+import { promisify } from 'util';
 
-/**
- * Estimate storage & memory limits for the Docker images that power a local
- * dev container or docker‑compose stack.
- *
- *   • Scans the nearest docker‑compose file (docker-compose.yml, compose.yml …)
- *   • Reads .devcontainer/devcontainer.json if present
- *   • For every referenced image it calls `docker image inspect` to get the
- *     unpacked size (official Size field)
- *   • For services that declare `mem_limit` or
- *     `deploy.resources.limits.memory`, aggregates those as the memory budget
- *
- * Returned totals are **bytes** (caller can pretty‑print as MiB/GiB).
- */
+const execAsync = promisify(exec);
 
-const exec = promisify(execCb);
-
-export interface ImageResource {
+export interface DockerContainer {
+  id: string;
   name: string;
-  storageBytes: number;       // layer size, on‑disk
-  memoryLimitBytes: number | null; // null → no limit declared
+  cpu?: string;
+  memory?: string;
+  status: string;
 }
 
-export interface DockerResourceSummary {
-  images: ImageResource[];
-  totalStorageBytes: number;
-  /**
-   * Sum of declared memory limits. If *no* service declares one, the field is
-   * null because any figure would be arbitrary.
-   */
-  totalMemoryLimitBytes: number | null;
+export interface DockerResources {
+  containers: DockerContainer[];
+  timestamp: string;
 }
 
-export async function collectDockerResources(
-  workDir: string = process.cwd(),
-): Promise<DockerResourceSummary> {
-  const composeFile = await findComposeFile(workDir);
-  const images: Set<string> = new Set();
-  const memLimits: Record<string, number | null> = {};
-
-  // ── docker‑compose ──────────────────────────────────────────────
-  if (composeFile) {
-    const { stdout } = await exec(
-      `docker compose -f ${composeFile} config --format json`,
-    );
-    const composeObj = JSON.parse(stdout);
-
-    for (const svc of Object.values<any>(composeObj.services ?? {})) {
-      const imgName: string | undefined = svc.image ?? svc.build?.image;
-      if (imgName) images.add(imgName);
-
-      // memory limit (two common syntaxes)
-      let mem: number | null = null;
-      if (svc.mem_limit) mem = parseBytes(svc.mem_limit);
-      else if (svc.deploy?.resources?.limits?.memory) {
-        mem = parseBytes(svc.deploy.resources.limits.memory);
-      }
-      if (imgName) memLimits[imgName] = mem;
-    }
-  }
-
-  // ── .devcontainer/devcontainer.json ────────────────────────────
-  const devPath = await findDevContainer(workDir);
-  if (devPath) {
-    const devCfg = JSON.parse(await fs.readFile(devPath, "utf-8"));
-    if (devCfg.image) images.add(devCfg.image);
-    // If devcontainer builds a Dockerfile, the final image name is unknown
-  }
-
-  // ── Inspect images for size ────────────────────────────────────
-  const imageSummaries: ImageResource[] = [];
-  let totalSize = 0;
-  let totalMem = 0;
-  let hasMem = false;
-
-  for (const img of images) {
-    const { stdout } = await exec(
-      `docker image inspect ${img} --format '{{json .}}'`,
-    );
-    const meta = JSON.parse(stdout);
-    const size: number = meta.Size ?? 0;
-    totalSize += size;
-
-    const mem = memLimits[img] ?? null;
-    if (mem !== null) {
-      totalMem += mem;
-      hasMem = true;
-    }
-
-    imageSummaries.push({
-      name: img,
-      storageBytes: size,
-      memoryLimitBytes: mem,
-    });
-  }
-
-  return {
-    images: imageSummaries,
-    totalStorageBytes: totalSize,
-    totalMemoryLimitBytes: hasMem ? totalMem : null,
-  };
-}
-
-// ──────────────────────────────────────────────────────────────────
-
-function parseBytes(spec: string): number | null {
-  // Accepts Docker units like "512m", "2g", "1024k"
-  const m = /^(\d+(?:\.\d+)?)([kKmMgG])?b?$/.exec(spec.trim());
-  if (!m) return null;
-  const val = parseFloat(m[1]);
-  const unit = m[2]?.toLowerCase();
-  const pow = unit === "k" ? 10 : unit === "m" ? 20 : unit === "g" ? 30 : 0;
-  return val * 2 ** pow;
-}
-
-async function findComposeFile(dir: string): Promise<string | null> {
-  const names = [
-    "docker-compose.yml",
-    "docker-compose.yaml",
-    "compose.yml",
-    "compose.yaml",
-  ];
-  for (const name of names) {
-    const p = path.join(dir, name);
+export class DockerResourceCollector {
+  async collect(): Promise<DockerResources> {
     try {
-      await fs.access(p);
-      return p;
-    } catch {
-      /* ignore */
+      // Check if Docker is running
+      await execAsync('docker info');
+      
+      // Get container list
+      const { stdout: containerList } = await execAsync('docker ps --format "{{.ID}}|{{.Names}}|{{.Status}}"');
+      
+      if (!containerList.trim()) {
+        return {
+          containers: [],
+          timestamp: new Date().toISOString()
+        };
+      }
+      
+      const containers: DockerContainer[] = [];
+      const lines = containerList.trim().split('\n');
+      
+      for (const line of lines) {
+        const [id, name, status] = line.split('|');
+        
+        try {
+          // Get container stats (CPU and Memory)
+          const { stdout: stats } = await execAsync(
+            `docker stats ${id} --no-stream --format "{{.CPUPerc}}|{{.MemUsage}}"`
+          );
+          
+          const [cpu, memory] = stats.trim().split('|');
+          
+          containers.push({
+            id,
+            name,
+            cpu,
+            memory,
+            status
+          });
+        } catch (error) {
+          // If stats fail, still include the container
+          containers.push({
+            id,
+            name,
+            status,
+            cpu: 'N/A',
+            memory: 'N/A'
+          });
+        }
+      }
+      
+      return {
+        containers,
+        timestamp: new Date().toISOString()
+      };
+      
+    } catch (error) {
+      // Docker not running or not installed
+      console.error('Docker error:', error);
+      return {
+        containers: [],
+        timestamp: new Date().toISOString()
+      };
     }
   }
-  return null;
-}
-
-async function findDevContainer(dir: string): Promise<string | null> {
-  const p = path.join(dir, ".devcontainer", "devcontainer.json");
-  try {
-    await fs.access(p);
-    return p;
-  } catch {
-    return null;
+  
+  async getContainerDetails(containerId: string): Promise<DockerContainer | null> {
+    try {
+      const { stdout: details } = await execAsync(
+        `docker inspect ${containerId} --format "{{.Name}}|{{.State.Status}}"`
+      );
+      
+      const [name, status] = details.trim().split('|');
+      
+      const { stdout: stats } = await execAsync(
+        `docker stats ${containerId} --no-stream --format "{{.CPUPerc}}|{{.MemUsage}}"`
+      );
+      
+      const [cpu, memory] = stats.trim().split('|');
+      
+      return {
+        id: containerId,
+        name: name.replace(/^\//, ''), // Remove leading slash
+        cpu,
+        memory,
+        status
+      };
+    } catch (error) {
+      return null;
+    }
   }
 }
