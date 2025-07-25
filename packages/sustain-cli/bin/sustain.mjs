@@ -9,7 +9,7 @@ import { dirname, join } from 'path';
 import fs from 'fs';
 
 // Import core functionality
-import { DockerResourceCollector } from '@randish/sustain-core';
+import { DockerResourceCollector, ComposeAnalyzer } from '@randish/sustain-core';
 
 // Setup for ESM
 const require = createRequire(import.meta.url);
@@ -55,12 +55,56 @@ program
   .alias('res')
   .description('Monitor and analyze system resources')
   .option('-d, --docker', 'Show Docker container resources')
+  .option('-c, --compose', 'Analyze docker-compose files in current project')
   .option('-s, --system', 'Show system resources')
   .option('-f, --format <format>', 'Output format (table, json, csv)', 'table')
   .option('--watch', 'Watch resources in real-time')
   .action(async (options) => {
     try {
-      if (options.docker) {
+      if (options.compose) {
+        const analyzer = new ComposeAnalyzer();
+        const analyses = await analyzer.analyze();
+        
+        if (options.format === 'json') {
+          console.log(JSON.stringify(analyses, null, 2));
+        } else {
+          // Table format
+          console.log(chalk.cyan('\n🐳 Docker Compose Analysis:\n'));
+          
+          if (analyses.length === 0) {
+            console.log(chalk.gray('No docker-compose files found in current directory.'));
+          } else {
+            for (const analysis of analyses) {
+              console.log(chalk.yellow(`📄 ${analysis.composeFile}`));
+              console.log(chalk.green(`   Sustainability Score: ${analysis.sustainabilityScore}/100`));
+              console.log(`   Total Estimated Size: ${analysis.totalEstimatedSize}`);
+              console.log(`   Total Estimated Memory: ${analysis.totalEstimatedMemory}`);
+              console.log(`   Total Estimated CPU: ${analysis.totalEstimatedCPU}\n`);
+              
+              console.log(chalk.blue('   Services:'));
+              for (const service of analysis.services) {
+                console.log(`   - ${service.name}:`);
+                console.log(`     Image: ${service.image || 'built locally'}`);
+                console.log(`     Est. Size: ${service.estimatedSize}`);
+                console.log(`     Est. Memory: ${service.estimatedMemory}`);
+                console.log(`     Est. CPU: ${service.estimatedCPU} cores`);
+                if (service.replicas > 1) {
+                  console.log(`     Replicas: ${service.replicas}`);
+                }
+                console.log();
+              }
+              
+              if (analysis.recommendations.length > 0) {
+                console.log(chalk.yellow('   💡 Recommendations:'));
+                for (const rec of analysis.recommendations) {
+                  console.log(`   • ${rec}`);
+                }
+                console.log();
+              }
+            }
+          }
+        }
+      } else if (options.docker) {
         const collector = new DockerResourceCollector();
         const resources = await collector.collect();
         
@@ -81,7 +125,7 @@ program
           }
         }
       } else {
-        console.log(chalk.yellow('Please specify a resource type: --docker or --system'));
+        console.log(chalk.yellow('Please specify a resource type: --docker, --compose, or --system'));
       }
     } catch (error) {
       console.error(chalk.red('Error:', error.message));

@@ -1,6 +1,6 @@
 {
   "name": "@randish/sustain-core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Core functionality for Sustain CLI",
   "type": "module",
   "main": "./dist/index.js",
@@ -22,13 +22,17 @@
   "files": [
     "dist"
   ],
+  "dependencies": {
+    "dockerode": "^4.0.0"
+  },
   "devDependencies": {
     "tsup": "^8.0.0",
     "typescript": "^5.0.0",
-    "@types/node": "^20.0.0"
+    "@types/node": "^20.0.0",
+    "@types/js-yaml": "^4.0.5"
   },
-  "dependencies": {
-    "dockerode": "^4.0.0"
+  "optionalDependencies": {
+    "js-yaml": "^4.1.0"
   },
   "engines": {
     "node": ">=16.0.0"
