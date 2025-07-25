@@ -1,13 +1,31 @@
 {
   "name": "@randish/sustain-monorepo",
-  "version": "0.0.0",
-  "description": "",
+  "version": "0.0.3",
+  "description": "Monorepo for @randish/sustain. # Sustain-cli",
   "main": "index.js",
+  "dependencies": {
+    "@randish/sustain-core": "^0.0.1",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "pnpm -r run build",
+    "prepublishOnly": "pnpm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Randish-soft/Sustain-cli.git"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs"
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Randish-soft/Sustain-cli/issues"
+  },
+  "homepage": "https://github.com/Randish-soft/Sustain-cli#readme",
+  "publishConfig": {
+    "access": "public"
+  }
 }

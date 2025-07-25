@@ -1,0 +1,20 @@
+{
+  "name": "@randish/sustain",
+  "version": "0.0.3",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bin": "bin/sustain.mjs",
+  "dependencies": {
+    "@randish/sustain-core": "^0.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
