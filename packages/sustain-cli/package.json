@@ -1,20 +1,40 @@
 {
-  "name": "@randish/sustain",
-  "version": "0.0.3",
-  "description": "",
-  "main": "index.js",
+  "name": "@randish/sustain-cli",
+  "version": "0.1.0",
+  "description": "CLI for sustainability and resource monitoring",
+  "type": "module",
+  "bin": {
+    "sustain": "./bin/sustain.mjs"
+  },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node bin/sustain.mjs",
+    "dev": "node --watch bin/sustain.mjs",
+    "link": "npm link",
+    "unlink": "npm unlink -g @randish/sustain-cli"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
-  "bin": "bin/sustain.mjs",
   "dependencies": {
-    "@randish/sustain-core": "^0.0.2"
+    "@randish/sustain-core": "workspace:*",
+    "commander": "^11.0.0",
+    "chalk": "^5.3.0",
+    "figlet": "^1.7.0",
+    "ora": "^7.0.1",
+    "cli-table3": "^0.6.3"
   },
-  "publishConfig": {
-    "access": "public"
-  }
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/figlet": "^1.5.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "keywords": [
+    "cli",
+    "sustainability",
+    "docker",
+    "monitoring",
+    "carbon-footprint",
+    "resources"
+  ],
+  "author": "Randish-soft",
+  "license": "MIT"
 }
