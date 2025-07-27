@@ -49,6 +49,70 @@ declare class ComposeAnalyzer {
     private calculateSustainabilityScore;
 }
 
+interface SecurityIssue {
+    type: string;
+    severity: 'high' | 'medium' | 'low';
+    file: string;
+    line?: number;
+    message: string;
+}
+interface CodeComplexity {
+    file: string;
+    complexity: number;
+    lines: number;
+    functions: number;
+    issues: string[];
+}
+interface SanityIssue {
+    type: string;
+    file: string;
+    message: string;
+}
+interface ProjectAnalysis {
+    projectPath: string;
+    security: {
+        score: number;
+        issues: SecurityIssue[];
+        recommendations: string[];
+    };
+    sanity: {
+        score: number;
+        issues: SanityIssue[];
+        recommendations: string[];
+    };
+    codeQuality: {
+        score: number;
+        complexFiles: CodeComplexity[];
+        recommendations: string[];
+    };
+    overall: {
+        score: number;
+        summary: string;
+    };
+}
+declare class ProjectAnalyzer {
+    private projectPath;
+    private skipDirs;
+    constructor(projectPath?: string);
+    analyze(options?: {
+        security?: boolean;
+        sanity?: boolean;
+        quality?: boolean;
+    }): Promise<ProjectAnalysis>;
+    private analyzeSecurityAsync;
+    private analyzeSanity;
+    private analyzeCodeQuality;
+    private analyzeFileComplexity;
+    private getAllFiles;
+    private getAllCodeFiles;
+    private hasTestFiles;
+    private fileExists;
+    private generateSecurityRecommendations;
+    private generateSanityRecommendations;
+    private generateQualityRecommendations;
+    private generateSummary;
+}
+
 declare function placeholder(): string;
 
-export { type ComposeAnalysis, ComposeAnalyzer, type ComposeService, type DockerContainer, DockerResourceCollector, type DockerResources, placeholder };
+export { type ComposeAnalysis, ComposeAnalyzer, type ComposeService, type DockerContainer, DockerResourceCollector, type DockerResources, ProjectAnalyzer, placeholder };
