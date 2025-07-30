@@ -21,8 +21,8 @@ importers:
   packages/sustain-cli:
     dependencies:
       '@randish/sustain-core':
-        specifier: workspace:*
-        version: link:../sustain-core
+        specifier: ^0.3.0
+        version: 0.3.0
       chalk:
         specifier: ^5.3.0
         version: 5.4.1
@@ -299,6 +299,10 @@ packages:
 
   '@randish/sustain-core@0.0.1':
     resolution: {integrity: sha512-i/x567PPt7dsRuecEYaRrUid8ov4Z//mXVSBiPzpz5lctbO2MaBN4i1jC1da2HK/HWXU6+xBVLnAMVfGFuAKUA==}
+
+  '@randish/sustain-core@0.3.0':
+    resolution: {integrity: sha512-1V+vdR+BolJuucojaEbJhkIa/FQcZJcl6TX/Q7nTIFpE9hKIY0fmrXXBq8jnbDROme/D21qGajpgL4CZTsVuBg==}
+    engines: {node: '>=16.0.0'}
 
   '@rollup/rollup-android-arm-eabi@4.45.1':
     resolution: {integrity: sha512-NEySIFvMY0ZQO+utJkgoMiCAjMrGvnbDLHvcmlA33UXJpYBCvlBEbMMtV837uCkS+plG2umfhn0T5mMAxGrlRA==}
@@ -1118,6 +1122,14 @@ snapshots:
   '@protobufjs/utf8@1.1.0': {}
 
   '@randish/sustain-core@0.0.1': {}
+
+  '@randish/sustain-core@0.3.0':
+    dependencies:
+      dockerode: 4.0.7
+    optionalDependencies:
+      js-yaml: 4.1.0
+    transitivePeerDependencies:
+      - supports-color
 
   '@rollup/rollup-android-arm-eabi@4.45.1':
     optional: true
