@@ -3,7 +3,6 @@
 ## Prerequisites
 - Node.js (v18+)
 - pnpm
-- Docker (optional, for container analysis)
 
 ## Setup
 
