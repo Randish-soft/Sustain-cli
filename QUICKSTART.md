@@ -129,29 +129,7 @@ sudo usermod -aG docker $USER
 sudo sustain resources --docker
 ```
 
-### Build Errors
 
-```bash
-# Clean and rebuild
-cd packages/sustain-core
-rm -rf dist/
-pnpm build
-```
-
-## Package Scripts
-
-Add these to your `packages/sustain-cli/package.json`:
-
-```json
-{
-  "scripts": {
-    "start": "node bin/sustain.mjs",
-    "dev": "node --watch bin/sustain.mjs",
-    "link": "npm link",
-    "unlink": "npm unlink -g @randish/sustain-cli"
-  }
-}
-```
 
 ## Environment Variables
 
