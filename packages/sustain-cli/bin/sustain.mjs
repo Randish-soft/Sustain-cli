@@ -5,10 +5,12 @@ import figlet from 'figlet';
 import chalk from 'chalk';
 import ora from 'ora';
 import Table from 'cli-table3';
+import path from 'node:path';
 import { 
   DockerResourceCollector, 
   ComposeAnalyzer,
-  ProjectAnalyzer 
+  ProjectAnalyzer,
+  simulateFromCache
 } from '@randish/sustain-core';
 
 const program = new Command();
@@ -83,11 +85,51 @@ const carbonCommand = new Command('carbon')
   });
 
 // Energy command
+// Energy command  ⚡
 const energyCommand = new Command('energy')
-  .description('Energy consumption analysis')
-  .action(() => {
-    console.log(chalk.yellow('Energy consumption analysis - Coming soon!'));
+  .description('Estimate energy use (kWh) for each cached scope')
+  .option(
+    '-c, --cache <file>',
+    'Path to scope cache produced by the analyser',
+    path.join(process.cwd(), '.sustain', 'scope-cache.json'),
+  )
+  .action(async (options) => {
+    const spinner = ora('Calculating energy consumption…').start();
+    try {
+      const results = await simulateFromCache(options.cache);
+      spinner.stop();
+
+      if (results.length === 0) {
+        console.log(chalk.yellow('No scopes found in cache'));
+        return;
+      }
+
+      console.log(chalk.bold('\n⚡ Energy Consumption (kWh / month)'));
+
+      const table = new Table({
+        head: ['Scope', 'Kind', 'Total', 'Breakdown'],
+        colWidths: [25, 12, 12, 50],
+      });
+
+      results.forEach((r) => {
+        const breakdown = Object.entries(r.breakdown)
+          .map(([k, v]) => `${k}: ${v.toFixed(3)}`)
+          .join(', ');
+        table.push([
+          r.scope.name,
+          r.scope.kind,
+          r.kWhTotal.toFixed(3),
+          breakdown,
+        ]);
+      });
+
+      console.log(table.toString());
+    } catch (err) {
+      spinner.fail('Failed to calculate energy consumption');
+      console.error(chalk.red((err as Error).message));
+    }
   });
+
 
 // Report command
 const reportCommand = new Command('report')
