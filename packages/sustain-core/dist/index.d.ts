@@ -74,16 +74,22 @@ interface ProjectAnalysis {
         score: number;
         issues: SecurityIssue[];
         recommendations: string[];
+        analysisTime?: number;
+        error?: string;
     };
     sanity: {
         score: number;
         issues: SanityIssue[];
         recommendations: string[];
+        analysisTime?: number;
+        error?: string;
     };
     codeQuality: {
         score: number;
         complexFiles: CodeComplexity[];
         recommendations: string[];
+        analysisTime?: number;
+        error?: string;
     };
     overall: {
         score: number;
@@ -93,15 +99,28 @@ interface ProjectAnalysis {
 declare class ProjectAnalyzer {
     private projectPath;
     private skipDirs;
+    private maxFileSize;
+    private timeout;
     constructor(projectPath?: string);
     analyze(options?: {
         security?: boolean;
         sanity?: boolean;
         quality?: boolean;
     }): Promise<ProjectAnalysis>;
+    private validateProjectPath;
+    private runSecurityAnalysis;
+    private runSanityAnalysis;
+    private runQualityAnalysis;
+    private calculateOverallScore;
     private analyzeSecurityAsync;
+    private analyzeFileForSecurity;
+    private checkUnsafePractices;
+    private checkVulnerableDependencies;
     private analyzeSanity;
+    private checkPackageJson;
+    private checkLargeFiles;
     private analyzeCodeQuality;
+    private analyzeFileComplexitySafe;
     private analyzeFileComplexity;
     private getAllFiles;
     private getAllCodeFiles;
