@@ -132,6 +132,46 @@ declare class ProjectAnalyzer {
     private generateSummary;
 }
 
+type ScopeKind = 'website' | 'ai' | 'gaming' | 'custom';
+interface BaseScope {
+    kind: ScopeKind;
+    name: string;
+}
+interface WebsiteScope extends BaseScope {
+    kind: 'website';
+    serverWattage: number;
+    hoursOnline: number;
+    pageViews: number;
+    osShare?: {
+        windows?: number;
+        macos?: number;
+        linux?: number;
+    };
+}
+interface AIScope extends BaseScope {
+    kind: 'ai';
+    boardWattage: number;
+    trainingHours: number;
+    inferenceHours: number;
+}
+interface GamingScope extends BaseScope {
+    kind: 'gaming';
+    serverWattage: number;
+    concurrentPlayers: number;
+    hoursOnline: number;
+}
+interface CustomScope extends BaseScope {
+    kind: 'custom';
+}
+type ScopeInput = WebsiteScope | AIScope | GamingScope | CustomScope;
+interface SimulationResult {
+    scope: ScopeInput;
+    kWhTotal: number;
+    breakdown: Record<string, number>;
+}
+declare function simulate(scope: ScopeInput): SimulationResult;
+declare function simulateFromCache(cacheFile?: string): Promise<SimulationResult[]>;
+
 declare function placeholder(): string;
 
-export { type ComposeAnalysis, ComposeAnalyzer, type ComposeService, type DockerContainer, DockerResourceCollector, type DockerResources, ProjectAnalyzer, placeholder };
+export { type AIScope, type BaseScope, type ComposeAnalysis, ComposeAnalyzer, type ComposeService, type CustomScope, type DockerContainer, DockerResourceCollector, type DockerResources, type GamingScope, ProjectAnalyzer, type ScopeInput, type ScopeKind, type SimulationResult, type WebsiteScope, placeholder, simulate, simulateFromCache };

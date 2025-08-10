@@ -824,9 +824,9 @@ var ProjectAnalyzer = class {
       return false;
     }
   }
-  async fileExists(path) {
+  async fileExists(path2) {
     try {
-      await fs2.access(path);
+      await fs2.access(path2);
       return true;
     } catch {
       return false;
@@ -895,6 +895,71 @@ var ProjectAnalyzer = class {
   }
 };
 
+// src/simulation/kwh.ts
+import * as path from "path";
+import { readFile } from "fs/promises";
+function simulate(scope) {
+  switch (scope.kind) {
+    case "website":
+      return simulateWebsite(scope);
+    case "ai":
+      return simulateAI(scope);
+    case "gaming":
+      return simulateGaming(scope);
+    case "custom":
+    default:
+      return { scope, kWhTotal: 0, breakdown: {} };
+  }
+}
+async function simulateFromCache(cacheFile = path.join(process.cwd(), ".sustain", "scope-cache.json")) {
+  const raw = await readFile(cacheFile, "utf8");
+  const scopes = JSON.parse(raw);
+  return scopes.map(simulate);
+}
+function simulateWebsite(scope) {
+  var _a, _b, _c;
+  const serverKWh = scope.serverWattage * scope.hoursOnline / 1e3;
+  const PAGE_KWH_DESKTOP = {
+    windows: 55e-5,
+    macos: 42e-5,
+    linux: 6e-4,
+    other: 48e-5
+  };
+  const share = {
+    windows: ((_a = scope.osShare) == null ? void 0 : _a.windows) ?? 0.65,
+    macos: ((_b = scope.osShare) == null ? void 0 : _b.macos) ?? 0.25,
+    linux: ((_c = scope.osShare) == null ? void 0 : _c.linux) ?? 0.1
+  };
+  const otherShare = 1 - share.windows - share.macos - share.linux;
+  const userKWh = scope.pageViews * (share.windows * PAGE_KWH_DESKTOP.windows + share.macos * PAGE_KWH_DESKTOP.macos + share.linux * PAGE_KWH_DESKTOP.linux + otherShare * PAGE_KWH_DESKTOP.other);
+  return buildResult(scope, { server: serverKWh, users: userKWh });
+}
+function simulateAI(scope) {
+  const TRAIN_UTIL = 0.9;
+  const INF_UTIL = 0.35;
+  const trainingKWh = scope.boardWattage * TRAIN_UTIL * scope.trainingHours / 1e3;
+  const inferenceKWh = scope.boardWattage * INF_UTIL * scope.inferenceHours / 1e3;
+  return buildResult(scope, { training: trainingKWh, inference: inferenceKWh });
+}
+function simulateGaming(scope) {
+  const PUE = 1.3;
+  const serverKWh = scope.serverWattage * scope.hoursOnline * PUE / 1e3;
+  return buildResult(scope, { server: serverKWh });
+}
+function round(v, d = 3) {
+  return Number(v.toFixed(d));
+}
+function buildResult(scope, breakdown) {
+  const rounded = Object.fromEntries(
+    Object.entries(breakdown).map(([k, v]) => [k, round(v)])
+  );
+  return {
+    scope,
+    kWhTotal: round(Object.values(rounded).reduce((a, b) => a + b, 0)),
+    breakdown: rounded
+  };
+}
+
 // src/index.ts
 function placeholder() {
   return "Hello, Sustain";
@@ -903,6 +968,8 @@ export {
   ComposeAnalyzer,
   DockerResourceCollector,
   ProjectAnalyzer,
-  placeholder
+  placeholder,
+  simulate,
+  simulateFromCache
 };
 //# sourceMappingURL=index.mjs.map

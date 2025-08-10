@@ -126,7 +126,7 @@ const energyCommand = new Command('energy')
       console.log(table.toString());
     } catch (err) {
       spinner.fail('Failed to calculate energy consumption');
-      console.error(chalk.red((err as Error).message));
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
     }
   });
 

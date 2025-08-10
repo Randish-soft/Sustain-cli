@@ -2,8 +2,8 @@
 //--------------------------------------------------------------
 //  ❖  Sustain-CLI  ‣  kWh Simulation module
 //--------------------------------------------------------------
-import fs from 'node:fs/promises';
-import path from 'node:path';
+import * as path from 'node:path';
+import { readFile } from 'node:fs/promises';
 
 /* ============================================================
  *  Types
@@ -37,7 +37,12 @@ export interface GamingScope extends BaseScope {
   hoursOnline: number;     // h / month
 }
 
-export type ScopeInput = WebsiteScope | AIScope | GamingScope | BaseScope;
+export interface CustomScope extends BaseScope {
+  kind: 'custom';
+  // Add optional custom fields here if needed
+}
+
+export type ScopeInput = WebsiteScope | AIScope | GamingScope | CustomScope;
 
 export interface SimulationResult {
   scope: ScopeInput;
@@ -56,6 +61,7 @@ export function simulate(scope: ScopeInput): SimulationResult {
       return simulateAI(scope);
     case 'gaming':
       return simulateGaming(scope);
+    case 'custom':
     default:
       return { scope, kWhTotal: 0, breakdown: {} };
   }
@@ -64,7 +70,7 @@ export function simulate(scope: ScopeInput): SimulationResult {
 export async function simulateFromCache(
   cacheFile = path.join(process.cwd(), '.sustain', 'scope-cache.json'),
 ): Promise<SimulationResult[]> {
-  const raw = await fs.readFile(cacheFile, 'utf8');
+  const raw = await readFile(cacheFile, 'utf8');
   const scopes: ScopeInput[] = JSON.parse(raw);
   return scopes.map(simulate);
 }
