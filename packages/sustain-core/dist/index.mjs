@@ -1,3 +1,68 @@
+// src/simulation/kwh.ts
+import * as path from "path";
+import { readFile } from "fs/promises";
+function simulate(scope) {
+  switch (scope.kind) {
+    case "website":
+      return simulateWebsite(scope);
+    case "ai":
+      return simulateAI(scope);
+    case "gaming":
+      return simulateGaming(scope);
+    case "custom":
+    default:
+      return { scope, kWhTotal: 0, breakdown: {} };
+  }
+}
+async function simulateFromCache(cacheFile = path.join(process.cwd(), ".sustain", "scope-cache.json")) {
+  const raw = await readFile(cacheFile, "utf8");
+  const scopes = JSON.parse(raw);
+  return scopes.map(simulate);
+}
+function simulateWebsite(scope) {
+  var _a, _b, _c;
+  const serverKWh = scope.serverWattage * scope.hoursOnline / 1e3;
+  const PAGE_KWH_DESKTOP = {
+    windows: 55e-5,
+    macos: 42e-5,
+    linux: 6e-4,
+    other: 48e-5
+  };
+  const share = {
+    windows: ((_a = scope.osShare) == null ? void 0 : _a.windows) ?? 0.65,
+    macos: ((_b = scope.osShare) == null ? void 0 : _b.macos) ?? 0.25,
+    linux: ((_c = scope.osShare) == null ? void 0 : _c.linux) ?? 0.1
+  };
+  const otherShare = 1 - share.windows - share.macos - share.linux;
+  const userKWh = scope.pageViews * (share.windows * PAGE_KWH_DESKTOP.windows + share.macos * PAGE_KWH_DESKTOP.macos + share.linux * PAGE_KWH_DESKTOP.linux + otherShare * PAGE_KWH_DESKTOP.other);
+  return buildResult(scope, { server: serverKWh, users: userKWh });
+}
+function simulateAI(scope) {
+  const TRAIN_UTIL = 0.9;
+  const INF_UTIL = 0.35;
+  const trainingKWh = scope.boardWattage * TRAIN_UTIL * scope.trainingHours / 1e3;
+  const inferenceKWh = scope.boardWattage * INF_UTIL * scope.inferenceHours / 1e3;
+  return buildResult(scope, { training: trainingKWh, inference: inferenceKWh });
+}
+function simulateGaming(scope) {
+  const PUE = 1.3;
+  const serverKWh = scope.serverWattage * scope.hoursOnline * PUE / 1e3;
+  return buildResult(scope, { server: serverKWh });
+}
+function round(v, d = 3) {
+  return Number(v.toFixed(d));
+}
+function buildResult(scope, breakdown) {
+  const rounded = Object.fromEntries(
+    Object.entries(breakdown).map(([k, v]) => [k, round(v)])
+  );
+  return {
+    scope,
+    kWhTotal: round(Object.values(rounded).reduce((a, b) => a + b, 0)),
+    breakdown: rounded
+  };
+}
+
 // src/collectors/docker_resources.ts
 import { exec } from "child_process";
 import { promisify } from "util";
@@ -77,7 +142,7 @@ var DockerResourceCollector = class {
 
 // src/collectors/compose_analyzer.ts
 import { promises as fs } from "fs";
-import { join, resolve } from "path";
+import { join as join2, resolve } from "path";
 import { exec as exec2 } from "child_process";
 import { promisify as promisify2 } from "util";
 var execAsync2 = promisify2(exec2);
@@ -160,7 +225,7 @@ var ComposeAnalyzer = class {
       try {
         const entries = await fs.readdir(currentDir, { withFileTypes: true });
         for (const entry of entries) {
-          const fullPath = join(currentDir, entry.name);
+          const fullPath = join2(currentDir, entry.name);
           if (entry.isDirectory()) {
             if (!skipDirs.includes(entry.name)) {
               await scanDirectory(fullPath, basePath);
@@ -190,7 +255,7 @@ var ComposeAnalyzer = class {
     while (currentPath !== "/" && currentPath !== resolve(currentPath, "..")) {
       for (const indicator of indicators) {
         try {
-          await fs.access(join(currentPath, indicator));
+          await fs.access(join2(currentPath, indicator));
           console.log(`Found project root at: ${currentPath}`);
           return currentPath;
         } catch {
@@ -201,7 +266,7 @@ var ComposeAnalyzer = class {
     return null;
   }
   async analyzeComposeFile(filename) {
-    const filePath = filename.startsWith("/") ? filename : join(this.projectPath, filename);
+    const filePath = filename.startsWith("/") ? filename : join2(this.projectPath, filename);
     const content = await fs.readFile(filePath, "utf8");
     const compose = parseSimpleYaml(content);
     const services = [];
@@ -334,7 +399,7 @@ var ComposeAnalyzer = class {
 
 // src/analyzers/project_analyzer.ts
 import { promises as fs2 } from "fs";
-import { join as join2, extname } from "path";
+import { join as join3, extname } from "path";
 import { execSync } from "child_process";
 var ProjectAnalyzer = class {
   projectPath;
@@ -523,7 +588,7 @@ var ProjectAnalyzer = class {
   }
   async checkVulnerableDependencies(issues) {
     var _a;
-    const packageJsonPath = join2(this.projectPath, "package.json");
+    const packageJsonPath = join3(this.projectPath, "package.json");
     if (!await this.fileExists(packageJsonPath)) {
       return;
     }
@@ -575,14 +640,14 @@ var ProjectAnalyzer = class {
   async analyzeSanity() {
     const issues = [];
     try {
-      if (!await this.fileExists(join2(this.projectPath, "README.md"))) {
+      if (!await this.fileExists(join3(this.projectPath, "README.md"))) {
         issues.push({
           type: "missing-readme",
           file: "README.md",
           message: "No README.md file found"
         });
       }
-      if (!await this.fileExists(join2(this.projectPath, ".gitignore"))) {
+      if (!await this.fileExists(join3(this.projectPath, ".gitignore"))) {
         issues.push({
           type: "missing-gitignore",
           file: ".gitignore",
@@ -598,8 +663,8 @@ var ProjectAnalyzer = class {
           message: "No test files found in the project"
         });
       }
-      if (await this.fileExists(join2(this.projectPath, ".env"))) {
-        if (!await this.fileExists(join2(this.projectPath, ".env.example"))) {
+      if (await this.fileExists(join3(this.projectPath, ".env"))) {
+        if (!await this.fileExists(join3(this.projectPath, ".env.example"))) {
           issues.push({
             type: "missing-env-example",
             file: ".env.example",
@@ -616,7 +681,7 @@ var ProjectAnalyzer = class {
     return { score, issues, recommendations };
   }
   async checkPackageJson(issues) {
-    const packageJsonPath = join2(this.projectPath, "package.json");
+    const packageJsonPath = join3(this.projectPath, "package.json");
     if (!await this.fileExists(packageJsonPath)) {
       return;
     }
@@ -794,7 +859,7 @@ var ProjectAnalyzer = class {
       try {
         const entries = await fs2.readdir(currentDir, { withFileTypes: true });
         for (const entry of entries) {
-          const fullPath = join2(currentDir, entry.name);
+          const fullPath = join3(currentDir, entry.name);
           if (entry.isDirectory() && !self.skipDirs.includes(entry.name)) {
             await scan(fullPath);
           } else if (entry.isFile()) {
@@ -894,81 +959,10 @@ var ProjectAnalyzer = class {
     }
   }
 };
-
-// src/simulation/kwh.ts
-import * as path from "path";
-import { readFile } from "fs/promises";
-function simulate(scope) {
-  switch (scope.kind) {
-    case "website":
-      return simulateWebsite(scope);
-    case "ai":
-      return simulateAI(scope);
-    case "gaming":
-      return simulateGaming(scope);
-    case "custom":
-    default:
-      return { scope, kWhTotal: 0, breakdown: {} };
-  }
-}
-async function simulateFromCache(cacheFile = path.join(process.cwd(), ".sustain", "scope-cache.json")) {
-  const raw = await readFile(cacheFile, "utf8");
-  const scopes = JSON.parse(raw);
-  return scopes.map(simulate);
-}
-function simulateWebsite(scope) {
-  var _a, _b, _c;
-  const serverKWh = scope.serverWattage * scope.hoursOnline / 1e3;
-  const PAGE_KWH_DESKTOP = {
-    windows: 55e-5,
-    macos: 42e-5,
-    linux: 6e-4,
-    other: 48e-5
-  };
-  const share = {
-    windows: ((_a = scope.osShare) == null ? void 0 : _a.windows) ?? 0.65,
-    macos: ((_b = scope.osShare) == null ? void 0 : _b.macos) ?? 0.25,
-    linux: ((_c = scope.osShare) == null ? void 0 : _c.linux) ?? 0.1
-  };
-  const otherShare = 1 - share.windows - share.macos - share.linux;
-  const userKWh = scope.pageViews * (share.windows * PAGE_KWH_DESKTOP.windows + share.macos * PAGE_KWH_DESKTOP.macos + share.linux * PAGE_KWH_DESKTOP.linux + otherShare * PAGE_KWH_DESKTOP.other);
-  return buildResult(scope, { server: serverKWh, users: userKWh });
-}
-function simulateAI(scope) {
-  const TRAIN_UTIL = 0.9;
-  const INF_UTIL = 0.35;
-  const trainingKWh = scope.boardWattage * TRAIN_UTIL * scope.trainingHours / 1e3;
-  const inferenceKWh = scope.boardWattage * INF_UTIL * scope.inferenceHours / 1e3;
-  return buildResult(scope, { training: trainingKWh, inference: inferenceKWh });
-}
-function simulateGaming(scope) {
-  const PUE = 1.3;
-  const serverKWh = scope.serverWattage * scope.hoursOnline * PUE / 1e3;
-  return buildResult(scope, { server: serverKWh });
-}
-function round(v, d = 3) {
-  return Number(v.toFixed(d));
-}
-function buildResult(scope, breakdown) {
-  const rounded = Object.fromEntries(
-    Object.entries(breakdown).map(([k, v]) => [k, round(v)])
-  );
-  return {
-    scope,
-    kWhTotal: round(Object.values(rounded).reduce((a, b) => a + b, 0)),
-    breakdown: rounded
-  };
-}
-
-// src/index.ts
-function placeholder() {
-  return "Hello, Sustain";
-}
 export {
   ComposeAnalyzer,
   DockerResourceCollector,
   ProjectAnalyzer,
-  placeholder,
   simulate,
   simulateFromCache
 };

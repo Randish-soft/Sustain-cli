@@ -6,26 +6,25 @@ import chalk from 'chalk';
 import ora from 'ora';
 import Table from 'cli-table3';
 import path from 'node:path';
-import { 
-  DockerResourceCollector, 
+import {
+  DockerResourceCollector,
   ComposeAnalyzer,
-  ProjectAnalyzer,
-  simulateFromCache
+  ProjectAnalyzer
 } from '@randish/sustain-core';
 
 const program = new Command();
 
-// Display ASCII art banner
+// Banner
 console.log(chalk.green(figlet.textSync('Sustain', { horizontalLayout: 'default' })));
 console.log(chalk.green('🌱 Sustainability CLI Tools'));
 
-// Main program setup
+// Program
 program
   .name('sustain')
   .description('CLI for sustainability and resource monitoring')
   .version('0.1.2');
 
-// Resources command
+// resources
 const resourcesCommand = new Command('resources')
   .description('Monitor and analyze system resources')
   .option('--docker', 'Analyze Docker containers')
@@ -36,21 +35,12 @@ const resourcesCommand = new Command('resources')
       console.log(chalk.yellow('Please specify a resource type: --docker, --compose, or --system'));
       return;
     }
-
-    if (options.docker) {
-      await analyzeDocker();
-    }
-
-    if (options.compose) {
-      await analyzeCompose();
-    }
-
-    if (options.system) {
-      await analyzeSystem();
-    }
+    if (options.docker) await analyzeDocker();
+    if (options.compose) await analyzeCompose();
+    if (options.system) await analyzeSystem();
   });
 
-// Scope command
+// scope
 const scopeCommand = new Command('scope')
   .description('Analyze project scope for security, sanity, and code quality')
   .option('--security', 'Run only security analysis')
@@ -59,7 +49,6 @@ const scopeCommand = new Command('scope')
   .option('-p, --path <path>', 'Project path to analyze', process.cwd())
   .action(async (options) => {
     const spinner = ora('Analyzing project scope...').start();
-    
     try {
       const analyzer = new ProjectAnalyzer(options.path);
       const analysis = await analyzer.analyze({
@@ -67,25 +56,23 @@ const scopeCommand = new Command('scope')
         sanity: options.sanity,
         quality: options.quality
       });
-
       spinner.stop();
       displayScopeAnalysis(analysis, options);
     } catch (error) {
       spinner.fail('Analysis failed');
-      console.error(chalk.red(error.message));
+      console.error(chalk.red(error instanceof Error ? error.message : String(error)));
       process.exit(1);
     }
   });
 
-// Carbon command
+// carbon
 const carbonCommand = new Command('carbon')
   .description('Calculate carbon footprint')
   .action(() => {
     console.log(chalk.yellow('Carbon footprint calculation - Coming soon!'));
   });
 
-// Energy command
-// Energy command  ⚡
+// energy
 const energyCommand = new Command('energy')
   .description('Estimate energy use (kWh) for each cached scope')
   .option(
@@ -96,16 +83,25 @@ const energyCommand = new Command('energy')
   .action(async (options) => {
     const spinner = ora('Calculating energy consumption…').start();
     try {
+      // robust import that works whether named export exists or only default
+      const mod = await import('@randish/sustain-core');
+      const simulateFromCache =
+        mod.simulateFromCache ??
+        (mod.default && mod.default.simulateFromCache);
+
+      if (typeof simulateFromCache !== 'function') {
+        throw new Error('simulateFromCache is not exported by @randish/sustain-core');
+      }
+
       const results = await simulateFromCache(options.cache);
       spinner.stop();
 
-      if (results.length === 0) {
+      if (!results || results.length === 0) {
         console.log(chalk.yellow('No scopes found in cache'));
         return;
       }
 
       console.log(chalk.bold('\n⚡ Energy Consumption (kWh / month)'));
-
       const table = new Table({
         head: ['Scope', 'Kind', 'Total', 'Breakdown'],
         colWidths: [25, 12, 12, 50],
@@ -130,83 +126,71 @@ const energyCommand = new Command('energy')
     }
   });
 
-
-// Report command
+// report
 const reportCommand = new Command('report')
   .description('Generate sustainability report')
   .action(() => {
     console.log(chalk.yellow('Sustainability report generation - Coming soon!'));
   });
 
-// Add commands to program
+// add commands
 program.addCommand(resourcesCommand);
 program.addCommand(scopeCommand);
 program.addCommand(carbonCommand);
 program.addCommand(energyCommand);
 program.addCommand(reportCommand);
 
-// Docker analysis function
+// docker analysis
 async function analyzeDocker() {
   const spinner = ora('Analyzing Docker containers...').start();
-  
   try {
     const collector = new DockerResourceCollector();
     const data = await collector.collect();
-    
     spinner.stop();
-    
-    if (data.containers.length === 0) {
+
+    if (!data.containers || data.containers.length === 0) {
       console.log(chalk.yellow('No running Docker containers found'));
       return;
     }
-    
+
     console.log(chalk.bold('\n🐳 Docker Container Resources:'));
-    
     const table = new Table({
       head: ['Container', 'Status', 'CPU', 'Memory'],
       colWidths: [30, 15, 15, 20]
     });
-    
+
     data.containers.forEach(container => {
-      table.push([
-        container.name,
-        container.status,
-        container.cpu,
-        container.memory
-      ]);
+      table.push([container.name, container.status, container.cpu, container.memory]);
     });
-    
+
     console.log(table.toString());
   } catch (error) {
     spinner.fail('Failed to analyze Docker containers');
-    console.error(chalk.red(error.message));
+    console.error(chalk.red(error instanceof Error ? error.message : String(error)));
   }
 }
 
-// Compose analysis function
+// compose analysis
 async function analyzeCompose() {
   const spinner = ora('Searching for Docker Compose files...').start();
-  
   try {
     const analyzer = new ComposeAnalyzer();
     const analyses = await analyzer.analyze();
-    
     spinner.stop();
-    
-    if (analyses.length === 0) {
+
+    if (!analyses || analyses.length === 0) {
       console.log(chalk.yellow('No Docker Compose files found'));
       return;
     }
-    
+
     console.log(chalk.bold('\n🐳 Docker Compose Analysis:'));
-    
     analyses.forEach(analysis => {
       console.log(chalk.blue(`\n📄 ${analysis.composeFile}`));
       console.log(`   Sustainability Score: ${getScoreColor(analysis.sustainabilityScore)}${analysis.sustainabilityScore}/100${chalk.reset()}`);
       console.log(`   Total Estimated Size: ${analysis.totalEstimatedSize}`);
       console.log(`   Total Estimated Memory: ${analysis.totalEstimatedMemory}`);
       console.log(`   Total Estimated CPU: ${analysis.totalEstimatedCPU}`);
-      
+
       console.log(chalk.bold('   Services:'));
       analysis.services.forEach(service => {
         console.log(`   - ${chalk.cyan(service.name)}:`);
@@ -215,7 +199,7 @@ async function analyzeCompose() {
         console.log(`     Est. Memory: ${service.estimatedMemory}`);
         console.log(`     Est. CPU: ${service.estimatedCPU} cores`);
       });
-      
+
       if (analysis.recommendations.length > 0) {
         console.log(chalk.bold('   💡 Recommendations:'));
         analysis.recommendations.forEach(rec => {
@@ -225,69 +209,53 @@ async function analyzeCompose() {
     });
   } catch (error) {
     spinner.fail('Failed to analyze Docker Compose files');
-    console.error(chalk.red(error.message));
+    console.error(chalk.red(error instanceof Error ? error.message : String(error)));
   }
 }
 
-// System analysis function
+// system analysis
 async function analyzeSystem() {
   console.log(chalk.yellow('System resource analysis - Coming soon!'));
 }
 
-// Scope analysis display functions
+// display helpers
 function displayScopeAnalysis(analysis, options) {
   const runAll = !options.security && !options.sanity && !options.quality;
 
   console.log(chalk.bold('\n📊 Project Scope Analysis\n'));
   console.log(chalk.gray(`Project: ${analysis.projectPath}\n`));
 
-  // Overall score
   if (runAll) {
-    const scoreColor = analysis.overall.score >= 80 ? 'green' : 
-                      analysis.overall.score >= 60 ? 'yellow' : 'red';
-    console.log(chalk.bold('Overall Score: ') + 
-                chalk[scoreColor](`${analysis.overall.score}/100`));
+    const scoreColor = analysis.overall.score >= 80 ? 'green' :
+                       analysis.overall.score >= 60 ? 'yellow' : 'red';
+    console.log(chalk.bold('Overall Score: ') + chalk[scoreColor](`${analysis.overall.score}/100`));
     console.log(chalk.gray(analysis.overall.summary + '\n'));
   }
 
-  // Security Analysis
-  if (runAll || options.security) {
-    displaySecurityAnalysis(analysis.security);
-  }
-
-  // Sanity Analysis
-  if (runAll || options.sanity) {
-    displaySanityAnalysis(analysis.sanity);
-  }
-
-  // Code Quality Analysis
-  if (runAll || options.quality) {
-    displayCodeQualityAnalysis(analysis.codeQuality);
-  }
+  if (runAll || options.security) displaySecurityAnalysis(analysis.security);
+  if (runAll || options.sanity) displaySanityAnalysis(analysis.sanity);
+  if (runAll || options.quality) displayCodeQualityAnalysis(analysis.codeQuality);
 }
 
 function displaySecurityAnalysis(security) {
   console.log(chalk.bold.blue('\n🔒 Security Analysis'));
   console.log(chalk.gray('─'.repeat(50)));
-  
-  const scoreColor = security.score >= 80 ? 'green' : 
-                    security.score >= 60 ? 'yellow' : 'red';
+
+  const scoreColor = security.score >= 80 ? 'green' :
+                     security.score >= 60 ? 'yellow' : 'red';
   console.log(chalk.bold('Score: ') + chalk[scoreColor](`${security.score}/100`));
 
   if (security.issues.length > 0) {
     console.log(chalk.bold('\nIssues Found:'));
-    
     const table = new Table({
       head: ['Severity', 'Type', 'File', 'Message'],
       colWidths: [10, 20, 30, 40],
-      style: {
-        head: ['cyan']
-      }
+      style: { head: ['cyan'] }
     });
 
     security.issues.forEach(issue => {
       const severityColor = issue.severity === 'high' ? 'red' :
-                           issue.severity === 'medium' ? 'yellow' : 'gray';
+                            issue.severity === 'medium' ? 'yellow' : 'gray';
       table.push([
         chalk[severityColor](issue.severity.toUpperCase()),
         issue.type,
@@ -312,30 +280,21 @@ function displaySecurityAnalysis(security) {
 function displaySanityAnalysis(sanity) {
   console.log(chalk.bold.yellow('\n✨ Sanity Checks'));
   console.log(chalk.gray('─'.repeat(50)));
-  
-  const scoreColor = sanity.score >= 80 ? 'green' : 
-                    sanity.score >= 60 ? 'yellow' : 'red';
+
+  const scoreColor = sanity.score >= 80 ? 'green' :
+                     sanity.score >= 60 ? 'yellow' : 'red';
   console.log(chalk.bold('Score: ') + chalk[scoreColor](`${sanity.score}/100`));
 
   if (sanity.issues.length > 0) {
     console.log(chalk.bold('\nIssues Found:'));
-    
     const table = new Table({
       head: ['Type', 'File', 'Message'],
       colWidths: [25, 25, 50],
-      style: {
-        head: ['cyan']
-      }
+      style: { head: ['cyan'] }
     });
-
     sanity.issues.forEach(issue => {
-      table.push([
-        issue.type,
-        issue.file,
-        issue.message
-      ]);
+      table.push([issue.type, issue.file, issue.message]);
     });
-
     console.log(table.toString());
   } else {
     console.log(chalk.green('✓ Project structure looks good'));
@@ -352,25 +311,22 @@ function displaySanityAnalysis(sanity) {
 function displayCodeQualityAnalysis(quality) {
   console.log(chalk.bold.magenta('\n🍝 Code Quality Analysis'));
   console.log(chalk.gray('─'.repeat(50)));
-  
-  const scoreColor = quality.score >= 80 ? 'green' : 
-                    quality.score >= 60 ? 'yellow' : 'red';
+
+  const scoreColor = quality.score >= 80 ? 'green' :
+                     quality.score >= 60 ? 'yellow' : 'red';
   console.log(chalk.bold('Score: ') + chalk[scoreColor](`${quality.score}/100`));
 
   if (quality.complexFiles.length > 0) {
     console.log(chalk.bold('\nComplex Files (Potential Spaghetti Code):'));
-    
     const table = new Table({
       head: ['File', 'Complexity', 'Lines', 'Functions', 'Issues'],
       colWidths: [30, 12, 8, 12, 38],
-      style: {
-        head: ['cyan']
-      }
+      style: { head: ['cyan'] }
     });
 
     quality.complexFiles.forEach(file => {
       const complexityColor = file.complexity > 20 ? 'red' :
-                             file.complexity > 15 ? 'yellow' : 'white';
+                              file.complexity > 15 ? 'yellow' : 'white';
       table.push([
         file.file,
         chalk[complexityColor](file.complexity.toString()),
@@ -393,17 +349,15 @@ function displayCodeQualityAnalysis(quality) {
   }
 }
 
-// Helper function for score colors
+// colors
 function getScoreColor(score) {
   if (score >= 80) return chalk.green;
   if (score >= 60) return chalk.yellow;
   return chalk.red;
 }
 
-// Parse and execute
 program.parse(process.argv);
 
-// Show help if no command provided
 if (!process.argv.slice(2).length) {
   console.log('\nAvailable commands:');
   console.log('  sustain resources    - Monitor system resources');
