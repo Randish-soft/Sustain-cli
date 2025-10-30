@@ -1,369 +1,277 @@
 #!/usr/bin/env node
 
-import { Command } from 'commander';
-import figlet from 'figlet';
-import chalk from 'chalk';
-import ora from 'ora';
-import Table from 'cli-table3';
-import path from 'node:path';
-import {
-  DockerResourceCollector,
-  ComposeAnalyzer,
-  ProjectAnalyzer
-} from '@randish/sustain-core';
+console.log('🌱 Sustain CLI - Starting...\n');
 
-const program = new Command();
-
-// Banner
-console.log(chalk.green(figlet.textSync('Sustain', { horizontalLayout: 'default' })));
-console.log(chalk.green('🌱 Sustainability CLI Tools'));
-
-// Program
-program
-  .name('sustain')
-  .description('CLI for sustainability and resource monitoring')
-  .version('0.1.2');
-
-// resources
-const resourcesCommand = new Command('resources')
-  .description('Monitor and analyze system resources')
-  .option('--docker', 'Analyze Docker containers')
-  .option('--compose', 'Analyze Docker Compose files')
-  .option('--system', 'Analyze system resources')
-  .action(async (options) => {
-    if (!options.docker && !options.compose && !options.system) {
-      console.log(chalk.yellow('Please specify a resource type: --docker, --compose, or --system'));
-      return;
-    }
-    if (options.docker) await analyzeDocker();
-    if (options.compose) await analyzeCompose();
-    if (options.system) await analyzeSystem();
-  });
-
-// scope
-const scopeCommand = new Command('scope')
-  .description('Analyze project scope for security, sanity, and code quality')
-  .option('--security', 'Run only security analysis')
-  .option('--sanity', 'Run only sanity checks')
-  .option('--quality', 'Run only code quality analysis')
-  .option('-p, --path <path>', 'Project path to analyze', process.cwd())
-  .action(async (options) => {
-    const spinner = ora('Analyzing project scope...').start();
-    try {
-      const analyzer = new ProjectAnalyzer(options.path);
-      const analysis = await analyzer.analyze({
-        security: options.security,
-        sanity: options.sanity,
-        quality: options.quality
-      });
-      spinner.stop();
-      displayScopeAnalysis(analysis, options);
-    } catch (error) {
-      spinner.fail('Analysis failed');
-      console.error(chalk.red(error instanceof Error ? error.message : String(error)));
-      process.exit(1);
-    }
-  });
-
-// carbon
-const carbonCommand = new Command('carbon')
-  .description('Calculate carbon footprint')
-  .action(() => {
-    console.log(chalk.yellow('Carbon footprint calculation - Coming soon!'));
-  });
-
-// energy
-const energyCommand = new Command('energy')
-  .description('Estimate energy use (kWh) for each cached scope')
-  .option(
-    '-c, --cache <file>',
-    'Path to scope cache produced by the analyser',
-    path.join(process.cwd(), '.sustain', 'scope-cache.json'),
-  )
-  .action(async (options) => {
-    const spinner = ora('Calculating energy consumption…').start();
-    try {
-      // robust import that works whether named export exists or only default
-      const mod = await import('@randish/sustain-core');
-      const simulateFromCache =
-        mod.simulateFromCache ??
-        (mod.default && mod.default.simulateFromCache);
-
-      if (typeof simulateFromCache !== 'function') {
-        throw new Error('simulateFromCache is not exported by @randish/sustain-core');
-      }
-
-      const results = await simulateFromCache(options.cache);
-      spinner.stop();
-
-      if (!results || results.length === 0) {
-        console.log(chalk.yellow('No scopes found in cache'));
-        return;
-      }
-
-      console.log(chalk.bold('\n⚡ Energy Consumption (kWh / month)'));
-      const table = new Table({
-        head: ['Scope', 'Kind', 'Total', 'Breakdown'],
-        colWidths: [25, 12, 12, 50],
-      });
-
-      results.forEach((r) => {
-        const breakdown = Object.entries(r.breakdown)
-          .map(([k, v]) => `${k}: ${v.toFixed(3)}`)
-          .join(', ');
-        table.push([
-          r.scope.name,
-          r.scope.kind,
-          r.kWhTotal.toFixed(3),
-          breakdown,
-        ]);
-      });
-
-      console.log(table.toString());
-    } catch (err) {
-      spinner.fail('Failed to calculate energy consumption');
-      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
-    }
-  });
-
-// report
-const reportCommand = new Command('report')
-  .description('Generate sustainability report')
-  .action(() => {
-    console.log(chalk.yellow('Sustainability report generation - Coming soon!'));
-  });
-
-// add commands
-program.addCommand(resourcesCommand);
-program.addCommand(scopeCommand);
-program.addCommand(carbonCommand);
-program.addCommand(energyCommand);
-program.addCommand(reportCommand);
-
-// docker analysis
-async function analyzeDocker() {
-  const spinner = ora('Analyzing Docker containers...').start();
+async function loadCore() {
   try {
-    const collector = new DockerResourceCollector();
-    const data = await collector.collect();
-    spinner.stop();
-
-    if (!data.containers || data.containers.length === 0) {
-      console.log(chalk.yellow('No running Docker containers found'));
-      return;
-    }
-
-    console.log(chalk.bold('\n🐳 Docker Container Resources:'));
-    const table = new Table({
-      head: ['Container', 'Status', 'CPU', 'Memory'],
-      colWidths: [30, 15, 15, 20]
-    });
-
-    data.containers.forEach(container => {
-      table.push([container.name, container.status, container.cpu, container.memory]);
-    });
-
-    console.log(table.toString());
+    // Use the ESM version (.mjs) that we know works
+    const path = '../../sustain-core/dist/index.mjs';
+    console.log(`Trying import from: ${path}`);
+    const core = await import(path);
+    console.log('✅ Core package loaded successfully from ESM build!');
+    return core;
   } catch (error) {
-    spinner.fail('Failed to analyze Docker containers');
-    console.error(chalk.red(error instanceof Error ? error.message : String(error)));
+    console.log('❌ Could not load core package:', error.message);
+    console.log('💡 Using demo mode instead...');
+    return null;
   }
 }
 
-// compose analysis
-async function analyzeCompose() {
-  const spinner = ora('Searching for Docker Compose files...').start();
+async function main() {
+  const args = process.argv.slice(2);
+  const command = args[0] || 'help';
+  const projectPath = args[1] || '.';
+
+  const core = await loadCore();
+
   try {
-    const analyzer = new ComposeAnalyzer();
-    const analyses = await analyzer.analyze();
-    spinner.stop();
-
-    if (!analyses || analyses.length === 0) {
-      console.log(chalk.yellow('No Docker Compose files found'));
-      return;
+    switch (command) {
+      case 'analyze':
+        await runAnalysis(core, projectPath);
+        break;
+      case 'carbon':
+        await runCarbon(core, projectPath);
+        break;
+      case 'sustainability':
+        await runSustainability(core, projectPath);
+        break;
+      case 'future':
+        await runFuture(core, projectPath);
+        break;
+      case 'full':
+        await runFull(core, projectPath);
+        break;
+      case 'help':
+      default:
+        showHelp();
+        break;
     }
-
-    console.log(chalk.bold('\n🐳 Docker Compose Analysis:'));
-    analyses.forEach(analysis => {
-      console.log(chalk.blue(`\n📄 ${analysis.composeFile}`));
-      console.log(`   Sustainability Score: ${getScoreColor(analysis.sustainabilityScore)}${analysis.sustainabilityScore}/100${chalk.reset()}`);
-      console.log(`   Total Estimated Size: ${analysis.totalEstimatedSize}`);
-      console.log(`   Total Estimated Memory: ${analysis.totalEstimatedMemory}`);
-      console.log(`   Total Estimated CPU: ${analysis.totalEstimatedCPU}`);
-
-      console.log(chalk.bold('   Services:'));
-      analysis.services.forEach(service => {
-        console.log(`   - ${chalk.cyan(service.name)}:`);
-        console.log(`     Image: ${service.image || service.build || 'N/A'}`);
-        console.log(`     Est. Size: ${service.estimatedSize}`);
-        console.log(`     Est. Memory: ${service.estimatedMemory}`);
-        console.log(`     Est. CPU: ${service.estimatedCPU} cores`);
-      });
-
-      if (analysis.recommendations.length > 0) {
-        console.log(chalk.bold('   💡 Recommendations:'));
-        analysis.recommendations.forEach(rec => {
-          console.log(`   • ${rec}`);
-        });
-      }
-    });
   } catch (error) {
-    spinner.fail('Failed to analyze Docker Compose files');
-    console.error(chalk.red(error instanceof Error ? error.message : String(error)));
+    console.error('❌ Error:', error.message);
+    process.exit(1);
   }
 }
 
-// system analysis
-async function analyzeSystem() {
-  console.log(chalk.yellow('System resource analysis - Coming soon!'));
-}
-
-// display helpers
-function displayScopeAnalysis(analysis, options) {
-  const runAll = !options.security && !options.sanity && !options.quality;
-
-  console.log(chalk.bold('\n📊 Project Scope Analysis\n'));
-  console.log(chalk.gray(`Project: ${analysis.projectPath}\n`));
-
-  if (runAll) {
-    const scoreColor = analysis.overall.score >= 80 ? 'green' :
-                       analysis.overall.score >= 60 ? 'yellow' : 'red';
-    console.log(chalk.bold('Overall Score: ') + chalk[scoreColor](`${analysis.overall.score}/100`));
-    console.log(chalk.gray(analysis.overall.summary + '\n'));
-  }
-
-  if (runAll || options.security) displaySecurityAnalysis(analysis.security);
-  if (runAll || options.sanity) displaySanityAnalysis(analysis.sanity);
-  if (runAll || options.quality) displayCodeQualityAnalysis(analysis.codeQuality);
-}
-
-function displaySecurityAnalysis(security) {
-  console.log(chalk.bold.blue('\n🔒 Security Analysis'));
-  console.log(chalk.gray('─'.repeat(50)));
-
-  const scoreColor = security.score >= 80 ? 'green' :
-                     security.score >= 60 ? 'yellow' : 'red';
-  console.log(chalk.bold('Score: ') + chalk[scoreColor](`${security.score}/100`));
-
-  if (security.issues.length > 0) {
-    console.log(chalk.bold('\nIssues Found:'));
-    const table = new Table({
-      head: ['Severity', 'Type', 'File', 'Message'],
-      colWidths: [10, 20, 30, 40],
-      style: { head: ['cyan'] }
-    });
-
-    security.issues.forEach(issue => {
-      const severityColor = issue.severity === 'high' ? 'red' :
-                            issue.severity === 'medium' ? 'yellow' : 'gray';
-      table.push([
-        chalk[severityColor](issue.severity.toUpperCase()),
-        issue.type,
-        issue.file + (issue.line ? `:${issue.line}` : ''),
-        issue.message
-      ]);
-    });
-
-    console.log(table.toString());
+async function runAnalysis(core, projectPath) {
+  if (core && core.ProjectAnalyzer) {
+    console.log('🔍 Analyzing project structure and code quality...\n');
+    
+    const analyzer = new core.ProjectAnalyzer(projectPath);
+    const analysis = await analyzer.analyze();
+    
+    console.log(`📊 Overall Score: ${analysis.overall.score}/100`);
+    console.log(`📝 Summary: ${analysis.overall.summary}\n`);
+    
+    if (analysis.security.issues.length > 0) {
+      console.log('🚨 Security Issues:', analysis.security.issues.length);
+      analysis.security.issues.slice(0, 3).forEach(issue => {
+        console.log(`   - ${issue.type}: ${issue.message}`);
+      });
+    }
+    
+    if (analysis.codeQuality.complexFiles.length > 0) {
+      console.log('⚡ Complex Files:', analysis.codeQuality.complexFiles.length);
+      analysis.codeQuality.complexFiles.slice(0, 3).forEach(file => {
+        console.log(`   - ${file.file} (complexity: ${file.complexity})`);
+      });
+    }
   } else {
-    console.log(chalk.green('✓ No security issues found'));
-  }
-
-  if (security.recommendations.length > 0) {
-    console.log(chalk.bold('\n💡 Recommendations:'));
-    security.recommendations.forEach(rec => {
-      console.log(chalk.gray('  • ') + rec);
-    });
+    await runDemoAnalysis();
   }
 }
 
-function displaySanityAnalysis(sanity) {
-  console.log(chalk.bold.yellow('\n✨ Sanity Checks'));
-  console.log(chalk.gray('─'.repeat(50)));
-
-  const scoreColor = sanity.score >= 80 ? 'green' :
-                     sanity.score >= 60 ? 'yellow' : 'red';
-  console.log(chalk.bold('Score: ') + chalk[scoreColor](`${sanity.score}/100`));
-
-  if (sanity.issues.length > 0) {
-    console.log(chalk.bold('\nIssues Found:'));
-    const table = new Table({
-      head: ['Type', 'File', 'Message'],
-      colWidths: [25, 25, 50],
-      style: { head: ['cyan'] }
-    });
-    sanity.issues.forEach(issue => {
-      table.push([issue.type, issue.file, issue.message]);
-    });
-    console.log(table.toString());
+async function runCarbon(core, projectPath) {
+  if (core && core.CarbonEnergyAnalyzer) {
+    console.log('🌫️  Running carbon footprint analysis...\n');
+    
+    const analyzer = new core.CarbonEnergyAnalyzer();
+    const carbonMetrics = await analyzer.analyzeProjectCarbon(projectPath);
+    
+    console.log(`📊 Carbon Score: ${carbonMetrics.carbonScore}/100`);
+    console.log(`🌍 Estimated CO2: ${carbonMetrics.estimatedCO2PerMonth.toFixed(2)} kg/month`);
+    console.log(`🔋 Carbon Intensity: ${carbonMetrics.carbonIntensity} gCO2/KWh\n`);
+    
+    console.log('📈 Breakdown:');
+    console.log(`  • Computation: ${carbonMetrics.breakdown.computation.toFixed(2)} kg`);
+    console.log(`  • Storage: ${carbonMetrics.breakdown.storage.toFixed(2)} kg`);
+    console.log(`  • Network: ${carbonMetrics.breakdown.network.toFixed(2)} kg`);
+    console.log(`  • Embodied: ${carbonMetrics.breakdown.embodied.toFixed(2)} kg`);
   } else {
-    console.log(chalk.green('✓ Project structure looks good'));
-  }
-
-  if (sanity.recommendations.length > 0) {
-    console.log(chalk.bold('\n💡 Recommendations:'));
-    sanity.recommendations.forEach(rec => {
-      console.log(chalk.gray('  • ') + rec);
-    });
+    showCarbonDemo();
   }
 }
 
-function displayCodeQualityAnalysis(quality) {
-  console.log(chalk.bold.magenta('\n🍝 Code Quality Analysis'));
-  console.log(chalk.gray('─'.repeat(50)));
-
-  const scoreColor = quality.score >= 80 ? 'green' :
-                     quality.score >= 60 ? 'yellow' : 'red';
-  console.log(chalk.bold('Score: ') + chalk[scoreColor](`${quality.score}/100`));
-
-  if (quality.complexFiles.length > 0) {
-    console.log(chalk.bold('\nComplex Files (Potential Spaghetti Code):'));
-    const table = new Table({
-      head: ['File', 'Complexity', 'Lines', 'Functions', 'Issues'],
-      colWidths: [30, 12, 8, 12, 38],
-      style: { head: ['cyan'] }
+async function runSustainability(core, projectPath) {
+  if (core && core.AdvancedSustainabilityAnalyzer) {
+    console.log('🌱 Running comprehensive sustainability analysis...\n');
+    
+    const analyzer = new core.AdvancedSustainabilityAnalyzer();
+    const metrics = await analyzer.analyzeProject(projectPath);
+    
+    console.log(`🌍 Sustainability Score: ${metrics.overall.overall}/100 (${metrics.overall.category})`);
+    console.log(`📊 Carbon Impact: ${metrics.carbon.estimatedCO2PerMonth.toFixed(2)} kg CO2/month`);
+    console.log(`⚡ Energy Usage: ${metrics.energy.totalEnergyKWh.toFixed(2)} KWh/month`);
+    console.log(`💾 Memory Efficiency: ${metrics.memory.efficiency.allocationEfficiency}/100\n`);
+    
+    console.log('💡 Recommendations:');
+    metrics.overall.recommendations.forEach(rec => {
+      console.log(`  • ${rec}`);
     });
-
-    quality.complexFiles.forEach(file => {
-      const complexityColor = file.complexity > 20 ? 'red' :
-                              file.complexity > 15 ? 'yellow' : 'white';
-      table.push([
-        file.file,
-        chalk[complexityColor](file.complexity.toString()),
-        file.lines.toString(),
-        file.functions.toString(),
-        file.issues.length > 0 ? file.issues[0] : 'None'
-      ]);
-    });
-
-    console.log(table.toString());
   } else {
-    console.log(chalk.green('✓ Code complexity is within acceptable limits'));
+    showSustainabilityDemo();
   }
+}
 
-  if (quality.recommendations.length > 0) {
-    console.log(chalk.bold('\n💡 Recommendations:'));
-    quality.recommendations.forEach(rec => {
-      console.log(chalk.gray('  • ') + rec);
+async function runFuture(core, projectPath) {
+  if (core && core.ProjectFutureAnalyzer) {
+    console.log('🔮 Running future-proofing analysis...\n');
+    
+    const analyzer = new core.ProjectFutureAnalyzer();
+    const [idea, future] = await Promise.all([
+      analyzer.analyzeProjectIdea(projectPath),
+      analyzer.analyzeFutureProofing(projectPath)
+    ]);
+    
+    console.log(`💡 Idea Quality: ${idea.problemSolutionFit}/100`);
+    console.log(`🌿 Environmental Impact: ${idea.environmentalImpact}/100`);
+    console.log(`🚀 Scalability: ${idea.scalabilityPotential}/100`);
+    console.log(`🛡️  Future Proofing: ${future.technology.stackLongevity}/100\n`);
+    
+    console.log('🎯 SDG Alignment:');
+    idea.sdgAlignment.forEach(sdg => {
+      console.log(`  • SDG ${sdg.goals.join(',')}: ${sdg.contribution}/100 ${sdg.verified ? '✅' : '⚠️'}`);
     });
+  } else {
+    showFutureDemo();
   }
 }
 
-// colors
-function getScoreColor(score) {
-  if (score >= 80) return chalk.green;
-  if (score >= 60) return chalk.yellow;
-  return chalk.red;
+async function runFull(core, projectPath) {
+  if (core && core.SustainabilityEngine) {
+    console.log('🌍 Running comprehensive sustainability analysis...\n');
+    
+    const engine = new core.SustainabilityEngine(projectPath);
+    const report = await engine.generateComprehensiveReport();
+    
+    console.log(`🏆 Overall Sustainability: ${report.overallSustainability.score}/100 (${report.overallSustainability.category})`);
+    console.log(`📊 Code Quality: ${report.codeAnalysis.overall.score}/100`);
+    console.log(`🌱 Carbon Score: ${report.sustainabilityMetrics.carbon.carbonScore}/100`);
+    console.log(`⚡ Energy Efficiency: ${report.sustainabilityMetrics.energy.energyEfficiency}/100\n`);
+    
+    if (report.criticalIssues.length > 0) {
+      console.log('🚨 Critical Issues:');
+      report.criticalIssues.forEach(issue => {
+        console.log(`  • ${issue}`);
+      });
+    }
+    
+    if (report.immediateActions.length > 0) {
+      console.log('\n💡 Immediate Actions:');
+      report.immediateActions.forEach(action => {
+        console.log(`  • ${action}`);
+      });
+    }
+  } else {
+    showFullDemo();
+  }
 }
 
-program.parse(process.argv);
-
-if (!process.argv.slice(2).length) {
-  console.log('\nAvailable commands:');
-  console.log('  sustain resources    - Monitor system resources');
-  console.log('  sustain scope        - Analyze project scope');
-  console.log('  sustain carbon       - Calculate carbon footprint');
-  console.log('  sustain energy       - Energy consumption analysis');
-  console.log('  sustain report       - Generate sustainability report');
-  console.log('\nRun sustain <command> --help for detailed usage');
+// Demo functions (keep these as fallback)
+async function runDemoAnalysis() {
+  console.log('🔍 Running demo project analysis...\n');
+  console.log('📊 Overall Score: 85/100');
+  console.log('📝 Summary: Good project health with some areas for improvement.\n');
+  console.log('🚨 Security Issues: 2');
+  console.log('   - hardcoded-api-key: Potential hardcoded api key found');
+  console.log('   - vulnerable-dependencies: 2 high severity vulnerabilities\n');
+  console.log('⚡ Complex Files: 3');
+  console.log('   - src/analyzers/project_analyzer.ts (complexity: 15)');
+  console.log('   - src/sustainability-engine.ts (complexity: 12)');
+  console.log('   - src/collectors/compose_analyzer.ts (complexity: 8)\n');
+  console.log('💡 Recommendations:');
+  console.log('  • Use environment variables for sensitive data');
+  console.log('  • Run "npm audit fix" to update vulnerable dependencies');
+  console.log('  • Refactor complex functions into smaller, focused functions');
 }
+
+function showCarbonDemo() {
+  console.log(`
+🌫️  Carbon Analysis Demo:
+📊 Carbon Score: 75/100
+🌍 Estimated CO2: 25.5 kg/month
+🔋 Carbon Intensity: 475 gCO2/KWh
+📈 Breakdown:
+  • Computation: 15.2 kg
+  • Storage: 5.1 kg  
+  • Network: 3.8 kg
+  • Embodied: 1.4 kg
+💡 Recommendations:
+  • Optimize computational algorithms
+  • Implement better caching strategies
+  `);
+}
+
+function showSustainabilityDemo() {
+  console.log(`
+🌱 Sustainability Analysis Demo:
+🌍 Sustainability Score: 78/100 (B)
+📊 Carbon Impact: 25.5 kg CO2/month
+⚡ Energy Usage: 45.2 KWh/month
+💾 Memory Efficiency: 78/100
+💡 Recommendations:
+  • Optimize carbon footprint
+  • Improve energy efficiency
+  • Optimize memory usage
+  `);
+}
+
+function showFutureDemo() {
+  console.log(`
+🔮 Future Analysis Demo:
+💡 Idea Quality: 75/100
+🌿 Environmental Impact: 65/100
+🚀 Scalability: 80/100
+🛡️  Future Proofing: 85/100
+🎯 SDG Alignment:
+  • SDG 9,12: 70/100 ⚠️
+💡 Recommendations:
+  • Refine project value proposition
+  • Consider modernizing technology stack
+  `);
+}
+
+function showFullDemo() {
+  console.log(`
+🌍 Comprehensive Sustainability Demo:
+🏆 Overall Sustainability: 82/100 (B)
+📊 Code Quality: 85/100
+🌱 Carbon Score: 75/100
+⚡ Energy Efficiency: 82/100
+🚨 Critical Issues:
+  • Security score is low (50/100). Address security vulnerabilities immediately.
+💡 Immediate Actions:
+  • Some Docker containers are using high CPU. Consider optimizing or scaling.
+  `);
+}
+
+function showHelp() {
+  console.log(`
+Sustain CLI - Environmental Impact Analysis Tool
+
+Usage:
+  sustain analyze [path]     Analyze code quality and security
+  sustain carbon [path]      Analyze carbon footprint
+  sustain sustainability [path] Full sustainability assessment
+  sustain future [path]      Future-proofing and idea analysis
+  sustain full [path]        Comprehensive sustainability report
+  sustain help              Show this help message
+
+Examples:
+  sustain analyze ./my-project
+  sustain carbon
+  sustain sustainability ./my-app
+  sustain full
+  `);
+}
+
+main().catch(console.error);

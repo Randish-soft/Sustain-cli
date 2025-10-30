@@ -1,67 +1,954 @@
-// src/simulation/kwh.ts
-import * as path from "path";
-import { readFile } from "fs/promises";
-function simulate(scope) {
-  switch (scope.kind) {
-    case "website":
-      return simulateWebsite(scope);
-    case "ai":
-      return simulateAI(scope);
-    case "gaming":
-      return simulateGaming(scope);
-    case "custom":
-    default:
-      return { scope, kWhTotal: 0, breakdown: {} };
+// src/analyzers/project_analyzer.ts
+import { promises as fs } from "fs";
+import { join, extname } from "path";
+import { execSync } from "child_process";
+var ProjectAnalyzer = class {
+  projectPath;
+  skipDirs = ["node_modules", ".git", "dist", "build", "coverage", ".next", "vendor"];
+  maxFileSize = 10 * 1024 * 1024;
+  // 10MB max file size
+  timeout = 3e4;
+  // 30 second timeout
+  constructor(projectPath) {
+    this.projectPath = projectPath || process.cwd();
   }
-}
-async function simulateFromCache(cacheFile = path.join(process.cwd(), ".sustain", "scope-cache.json")) {
-  const raw = await readFile(cacheFile, "utf8");
-  const scopes = JSON.parse(raw);
-  return scopes.map(simulate);
-}
-function simulateWebsite(scope) {
-  var _a, _b, _c;
-  const serverKWh = scope.serverWattage * scope.hoursOnline / 1e3;
-  const PAGE_KWH_DESKTOP = {
-    windows: 55e-5,
-    macos: 42e-5,
-    linux: 6e-4,
-    other: 48e-5
-  };
-  const share = {
-    windows: ((_a = scope.osShare) == null ? void 0 : _a.windows) ?? 0.65,
-    macos: ((_b = scope.osShare) == null ? void 0 : _b.macos) ?? 0.25,
-    linux: ((_c = scope.osShare) == null ? void 0 : _c.linux) ?? 0.1
-  };
-  const otherShare = 1 - share.windows - share.macos - share.linux;
-  const userKWh = scope.pageViews * (share.windows * PAGE_KWH_DESKTOP.windows + share.macos * PAGE_KWH_DESKTOP.macos + share.linux * PAGE_KWH_DESKTOP.linux + otherShare * PAGE_KWH_DESKTOP.other);
-  return buildResult(scope, { server: serverKWh, users: userKWh });
-}
-function simulateAI(scope) {
-  const TRAIN_UTIL = 0.9;
-  const INF_UTIL = 0.35;
-  const trainingKWh = scope.boardWattage * TRAIN_UTIL * scope.trainingHours / 1e3;
-  const inferenceKWh = scope.boardWattage * INF_UTIL * scope.inferenceHours / 1e3;
-  return buildResult(scope, { training: trainingKWh, inference: inferenceKWh });
-}
-function simulateGaming(scope) {
-  const PUE = 1.3;
-  const serverKWh = scope.serverWattage * scope.hoursOnline * PUE / 1e3;
-  return buildResult(scope, { server: serverKWh });
-}
-function round(v, d = 3) {
-  return Number(v.toFixed(d));
-}
-function buildResult(scope, breakdown) {
-  const rounded = Object.fromEntries(
-    Object.entries(breakdown).map(([k, v]) => [k, round(v)])
-  );
-  return {
-    scope,
-    kWhTotal: round(Object.values(rounded).reduce((a, b) => a + b, 0)),
-    breakdown: rounded
-  };
-}
+  async analyze(options) {
+    const runAll = !options || !options.security && !options.sanity && !options.quality;
+    const analysis = {
+      projectPath: this.projectPath,
+      security: { score: 100, issues: [], recommendations: [] },
+      sanity: { score: 100, issues: [], recommendations: [] },
+      codeQuality: { score: 100, complexFiles: [], recommendations: [] },
+      overall: { score: 100, summary: "" }
+    };
+    if (!await this.validateProjectPath()) {
+      throw new Error(`Invalid project path: ${this.projectPath}`);
+    }
+    const analysisPromises = [];
+    if (runAll || (options == null ? void 0 : options.security)) {
+      analysisPromises.push(this.runSecurityAnalysis(analysis));
+    }
+    if (runAll || (options == null ? void 0 : options.sanity)) {
+      analysisPromises.push(this.runSanityAnalysis(analysis));
+    }
+    if (runAll || (options == null ? void 0 : options.quality)) {
+      analysisPromises.push(this.runQualityAnalysis(analysis));
+    }
+    await Promise.allSettled(analysisPromises);
+    this.calculateOverallScore(analysis);
+    return analysis;
+  }
+  async validateProjectPath() {
+    try {
+      const stats = await fs.stat(this.projectPath);
+      return stats.isDirectory();
+    } catch (error) {
+      return false;
+    }
+  }
+  async runSecurityAnalysis(analysis) {
+    const startTime = Date.now();
+    try {
+      analysis.security = await this.analyzeSecurityAsync();
+      analysis.security.analysisTime = Date.now() - startTime;
+    } catch (error) {
+      console.warn(`Security analysis failed: ${error.message}`);
+      analysis.security = {
+        score: 50,
+        issues: [],
+        recommendations: ["Manual security review needed due to analysis failure"],
+        analysisTime: Date.now() - startTime,
+        error: error.message
+      };
+    }
+  }
+  async runSanityAnalysis(analysis) {
+    const startTime = Date.now();
+    try {
+      analysis.sanity = await this.analyzeSanity();
+      analysis.sanity.analysisTime = Date.now() - startTime;
+    } catch (error) {
+      console.warn(`Sanity analysis failed: ${error.message}`);
+      analysis.sanity = {
+        score: 50,
+        issues: [],
+        recommendations: ["Manual project structure review needed due to analysis failure"],
+        analysisTime: Date.now() - startTime,
+        error: error.message
+      };
+    }
+  }
+  async runQualityAnalysis(analysis) {
+    const startTime = Date.now();
+    try {
+      analysis.codeQuality = await this.analyzeCodeQuality();
+      analysis.codeQuality.analysisTime = Date.now() - startTime;
+    } catch (error) {
+      console.warn(`Code quality analysis failed: ${error.message}`);
+      analysis.codeQuality = {
+        score: 50,
+        complexFiles: [],
+        recommendations: ["Manual code review needed due to analysis failure"],
+        analysisTime: Date.now() - startTime,
+        error: error.message
+      };
+    }
+  }
+  calculateOverallScore(analysis) {
+    const validScores = [];
+    if (!analysis.security.error) validScores.push(analysis.security.score);
+    if (!analysis.sanity.error) validScores.push(analysis.sanity.score);
+    if (!analysis.codeQuality.error) validScores.push(analysis.codeQuality.score);
+    if (validScores.length === 0) {
+      analysis.overall.score = 0;
+      analysis.overall.summary = "Analysis failed - manual review required";
+      return;
+    }
+    analysis.overall.score = Math.round(validScores.reduce((a, b) => a + b, 0) / validScores.length);
+    analysis.overall.summary = this.generateSummary(analysis);
+  }
+  async analyzeSecurityAsync() {
+    const issues = [];
+    try {
+      const files = await this.getAllFiles();
+      const batchSize = 10;
+      for (let i = 0; i < files.length; i += batchSize) {
+        const batch = files.slice(i, i + batchSize);
+        await Promise.all(batch.map((file) => this.analyzeFileForSecurity(file, issues)));
+      }
+      await this.checkVulnerableDependencies(issues);
+    } catch (error) {
+      throw new Error(`Security analysis failed: ${error.message}`);
+    }
+    const score = Math.max(0, 100 - issues.filter((i) => i.severity === "high").length * 20 - issues.filter((i) => i.severity === "medium").length * 10);
+    const recommendations = this.generateSecurityRecommendations(issues);
+    return { score, issues, recommendations };
+  }
+  async analyzeFileForSecurity(file, issues) {
+    try {
+      const stats = await fs.stat(file);
+      if (stats.size > this.maxFileSize) {
+        console.warn(`Skipping large file: ${file} (${(stats.size / 1024 / 1024).toFixed(2)}MB)`);
+        return;
+      }
+      const content = await fs.readFile(file, "utf8");
+      const secretPatterns = [
+        { pattern: /api[_-]?key\s*[:=]\s*["'][^"']+["']/gi, type: "hardcoded-api-key" },
+        { pattern: /password\s*[:=]\s*["'][^"']+["']/gi, type: "hardcoded-password" },
+        { pattern: /secret\s*[:=]\s*["'][^"']+["']/gi, type: "hardcoded-secret" },
+        { pattern: /token\s*[:=]\s*["'][^"']+["']/gi, type: "hardcoded-token" },
+        { pattern: /aws_access_key_id/gi, type: "aws-credentials" },
+        { pattern: /private[_-]?key/gi, type: "private-key" }
+      ];
+      const lines = content.split("\n");
+      lines.forEach((line, index) => {
+        for (const { pattern, type } of secretPatterns) {
+          if (pattern.test(line) && !line.includes("process.env") && !line.includes("example")) {
+            issues.push({
+              type,
+              severity: "high",
+              file: file.replace(this.projectPath + "/", ""),
+              line: index + 1,
+              message: `Potential ${type.replace("-", " ")} found`
+            });
+          }
+        }
+      });
+      if (file.endsWith(".js") || file.endsWith(".ts")) {
+        this.checkUnsafePractices(file, content, issues);
+      }
+    } catch (error) {
+      console.warn(`Failed to analyze file ${file}: ${error.message}`);
+    }
+  }
+  checkUnsafePractices(file, content, issues) {
+    if (content.includes("eval(")) {
+      issues.push({
+        type: "unsafe-eval",
+        severity: "high",
+        file: file.replace(this.projectPath + "/", ""),
+        message: "Use of eval() is a security risk"
+      });
+    }
+    if (content.includes("innerHTML")) {
+      issues.push({
+        type: "unsafe-html",
+        severity: "medium",
+        file: file.replace(this.projectPath + "/", ""),
+        message: "innerHTML can lead to XSS vulnerabilities"
+      });
+    }
+    if (content.match(/require\s*\([`'"]\s*\$\{/)) {
+      issues.push({
+        type: "dynamic-require",
+        severity: "medium",
+        file: file.replace(this.projectPath + "/", ""),
+        message: "Dynamic require() can be a security risk"
+      });
+    }
+  }
+  async checkVulnerableDependencies(issues) {
+    var _a;
+    const packageJsonPath = join(this.projectPath, "package.json");
+    if (!await this.fileExists(packageJsonPath)) {
+      return;
+    }
+    try {
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("npm audit timeout")), this.timeout);
+      });
+      const auditPromise = new Promise((resolve2) => {
+        var _a2;
+        try {
+          execSync("npm audit --json", { cwd: this.projectPath, stdio: "pipe" });
+          resolve2(null);
+        } catch (e) {
+          const output2 = ((_a2 = e.stdout) == null ? void 0 : _a2.toString()) || "";
+          resolve2(output2);
+        }
+      });
+      const output = await Promise.race([auditPromise, timeoutPromise]);
+      if (output) {
+        try {
+          const audit = JSON.parse(output);
+          if ((_a = audit.metadata) == null ? void 0 : _a.vulnerabilities) {
+            const vulns = audit.metadata.vulnerabilities;
+            if (vulns.high > 0) {
+              issues.push({
+                type: "vulnerable-dependencies",
+                severity: "high",
+                file: "package.json",
+                message: `${vulns.high} high severity vulnerabilities in dependencies`
+              });
+            }
+            if (vulns.moderate > 0) {
+              issues.push({
+                type: "vulnerable-dependencies",
+                severity: "medium",
+                file: "package.json",
+                message: `${vulns.moderate} moderate severity vulnerabilities in dependencies`
+              });
+            }
+          }
+        } catch (parseError) {
+          console.warn("Failed to parse npm audit output");
+        }
+      }
+    } catch (error) {
+      console.warn(`npm audit failed: ${error.message}`);
+    }
+  }
+  async analyzeSanity() {
+    const issues = [];
+    try {
+      if (!await this.fileExists(join(this.projectPath, "README.md"))) {
+        issues.push({
+          type: "missing-readme",
+          file: "README.md",
+          message: "No README.md file found"
+        });
+      }
+      if (!await this.fileExists(join(this.projectPath, ".gitignore"))) {
+        issues.push({
+          type: "missing-gitignore",
+          file: ".gitignore",
+          message: "No .gitignore file found"
+        });
+      }
+      await this.checkPackageJson(issues);
+      const hasTests = await this.hasTestFiles();
+      if (!hasTests) {
+        issues.push({
+          type: "no-tests",
+          file: "project",
+          message: "No test files found in the project"
+        });
+      }
+      if (await this.fileExists(join(this.projectPath, ".env"))) {
+        if (!await this.fileExists(join(this.projectPath, ".env.example"))) {
+          issues.push({
+            type: "missing-env-example",
+            file: ".env.example",
+            message: "Found .env but no .env.example file"
+          });
+        }
+      }
+      await this.checkLargeFiles(issues);
+    } catch (error) {
+      throw new Error(`Sanity analysis failed: ${error.message}`);
+    }
+    const score = Math.max(0, 100 - issues.length * 10);
+    const recommendations = this.generateSanityRecommendations(issues);
+    return { score, issues, recommendations };
+  }
+  async checkPackageJson(issues) {
+    const packageJsonPath = join(this.projectPath, "package.json");
+    if (!await this.fileExists(packageJsonPath)) {
+      return;
+    }
+    try {
+      const packageJson = JSON.parse(await fs.readFile(packageJsonPath, "utf8"));
+      if (!packageJson.name) {
+        issues.push({
+          type: "package-json-incomplete",
+          file: "package.json",
+          message: 'Missing "name" field in package.json'
+        });
+      }
+      if (!packageJson.version) {
+        issues.push({
+          type: "package-json-incomplete",
+          file: "package.json",
+          message: 'Missing "version" field in package.json'
+        });
+      }
+      if (!packageJson.description) {
+        issues.push({
+          type: "package-json-incomplete",
+          file: "package.json",
+          message: 'Missing "description" field in package.json'
+        });
+      }
+      if (!packageJson.scripts || Object.keys(packageJson.scripts).length === 0) {
+        issues.push({
+          type: "no-scripts",
+          file: "package.json",
+          message: "No scripts defined in package.json"
+        });
+      }
+    } catch (error) {
+      issues.push({
+        type: "invalid-package-json",
+        file: "package.json",
+        message: "Invalid or corrupted package.json file"
+      });
+    }
+  }
+  async checkLargeFiles(issues) {
+    try {
+      const files = await this.getAllFiles();
+      for (const file of files) {
+        try {
+          const stats = await fs.stat(file);
+          if (stats.size > 1024 * 1024 * 10) {
+            issues.push({
+              type: "large-file",
+              file: file.replace(this.projectPath + "/", ""),
+              message: `File is very large (${(stats.size / 1024 / 1024).toFixed(2)}MB)`
+            });
+          }
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error) {
+      console.warn(`Failed to check file sizes: ${error.message}`);
+    }
+  }
+  async analyzeCodeQuality() {
+    const complexFiles = [];
+    try {
+      const files = await this.getAllCodeFiles();
+      const batchSize = 5;
+      for (let i = 0; i < files.length; i += batchSize) {
+        const batch = files.slice(i, i + batchSize);
+        const batchResults = await Promise.allSettled(
+          batch.map((file) => this.analyzeFileComplexitySafe(file))
+        );
+        batchResults.forEach((result, index) => {
+          if (result.status === "fulfilled" && result.value) {
+            const analysis = result.value;
+            if (analysis.complexity > 10 || analysis.issues.length > 0) {
+              complexFiles.push(analysis);
+            }
+          } else if (result.status === "rejected") {
+            console.warn(`Failed to analyze ${batch[index]}: ${result.reason}`);
+          }
+        });
+      }
+      complexFiles.sort((a, b) => b.complexity - a.complexity);
+    } catch (error) {
+      throw new Error(`Code quality analysis failed: ${error.message}`);
+    }
+    let score = 100;
+    complexFiles.forEach((file) => {
+      if (file.complexity > 20) score -= 10;
+      else if (file.complexity > 15) score -= 5;
+      else if (file.complexity > 10) score -= 2;
+    });
+    const recommendations = this.generateQualityRecommendations(complexFiles);
+    return {
+      score: Math.max(0, score),
+      complexFiles: complexFiles.slice(0, 10),
+      // Top 10 most complex
+      recommendations
+    };
+  }
+  async analyzeFileComplexitySafe(filePath) {
+    try {
+      const stats = await fs.stat(filePath);
+      if (stats.size > this.maxFileSize) {
+        console.warn(`Skipping large file for complexity analysis: ${filePath}`);
+        return null;
+      }
+      const content = await fs.readFile(filePath, "utf8");
+      return this.analyzeFileComplexity(filePath, content);
+    } catch (error) {
+      throw new Error(`Failed to analyze file complexity for ${filePath}: ${error.message}`);
+    }
+  }
+  analyzeFileComplexity(filePath, content) {
+    const lines = content.split("\n");
+    const issues = [];
+    let complexity = 0;
+    let functionCount = 0;
+    const functionPattern = /function\s+\w+|const\s+\w+\s*=\s*\(|=>\s*{|class\s+\w+/g;
+    const complexityPatterns = [
+      { pattern: /if\s*\(/, weight: 1 },
+      { pattern: /else\s+if/, weight: 1 },
+      { pattern: /for\s*\(/, weight: 1 },
+      { pattern: /while\s*\(/, weight: 1 },
+      { pattern: /switch\s*\(/, weight: 2 },
+      { pattern: /catch\s*\(/, weight: 1 },
+      { pattern: /\?\s*.*\s*:/, weight: 1 }
+      // ternary
+    ];
+    functionCount = (content.match(functionPattern) || []).length;
+    lines.forEach((line, index) => {
+      var _a;
+      if (line.length > 120) {
+        issues.push(`Line ${index + 1} is too long (${line.length} chars)`);
+      }
+      for (const { pattern, weight } of complexityPatterns) {
+        if (pattern.test(line)) {
+          complexity += weight;
+        }
+      }
+      const indentLevel = ((_a = line.match(/^(\s*)/)) == null ? void 0 : _a[1].length) || 0;
+      if (indentLevel > 16) {
+        complexity += 1;
+        if (!issues.some((i) => i.includes("deeply nested"))) {
+          issues.push("Contains deeply nested code");
+        }
+      }
+    });
+    if (lines.length > 500) {
+      issues.push(`File is very long (${lines.length} lines)`);
+      complexity += 5;
+    }
+    if (functionCount > 20) {
+      issues.push(`Too many functions in one file (${functionCount})`);
+      complexity += 3;
+    }
+    const callbackHellPattern = /}\s*\)\s*}\s*\)\s*}/;
+    if (callbackHellPattern.test(content)) {
+      issues.push("Possible callback hell detected");
+      complexity += 5;
+    }
+    return {
+      file: filePath.replace(this.projectPath + "/", ""),
+      complexity,
+      lines: lines.length,
+      functions: functionCount,
+      issues
+    };
+  }
+  async getAllFiles(dir = this.projectPath) {
+    const files = [];
+    const self = this;
+    async function scan(currentDir) {
+      try {
+        const entries = await fs.readdir(currentDir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = join(currentDir, entry.name);
+          if (entry.isDirectory() && !self.skipDirs.includes(entry.name)) {
+            await scan(fullPath);
+          } else if (entry.isFile()) {
+            files.push(fullPath);
+          }
+        }
+      } catch (error) {
+        console.warn(`Cannot read directory ${currentDir}: ${error.message}`);
+      }
+    }
+    await scan(dir);
+    return files;
+  }
+  async getAllCodeFiles() {
+    const files = await this.getAllFiles();
+    const codeExtensions = [".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"];
+    return files.filter((file) => codeExtensions.includes(extname(file)));
+  }
+  async hasTestFiles() {
+    try {
+      const files = await this.getAllFiles();
+      return files.some(
+        (file) => file.includes("test") || file.includes("spec") || file.includes("__tests__") || file.endsWith(".test.js") || file.endsWith(".spec.js") || file.endsWith(".test.ts") || file.endsWith(".spec.ts")
+      );
+    } catch (error) {
+      console.warn(`Failed to check for test files: ${error.message}`);
+      return false;
+    }
+  }
+  async fileExists(path2) {
+    try {
+      await fs.access(path2);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  generateSecurityRecommendations(issues) {
+    const recommendations = [];
+    if (issues.some((i) => i.type.includes("hardcoded"))) {
+      recommendations.push("Use environment variables for sensitive data");
+      recommendations.push("Add .env to .gitignore and create .env.example");
+    }
+    if (issues.some((i) => i.type === "unsafe-eval")) {
+      recommendations.push("Replace eval() with safer alternatives like JSON.parse()");
+    }
+    if (issues.some((i) => i.type === "unsafe-html")) {
+      recommendations.push("Use textContent instead of innerHTML or sanitize input");
+    }
+    if (issues.some((i) => i.type === "vulnerable-dependencies")) {
+      recommendations.push('Run "npm audit fix" to update vulnerable dependencies');
+    }
+    return recommendations;
+  }
+  generateSanityRecommendations(issues) {
+    const recommendations = [];
+    if (issues.some((i) => i.type === "missing-readme")) {
+      recommendations.push("Create a README.md with project description and usage");
+    }
+    if (issues.some((i) => i.type === "no-tests")) {
+      recommendations.push("Add unit tests to improve code reliability");
+    }
+    if (issues.some((i) => i.type === "large-file")) {
+      recommendations.push("Consider using Git LFS for large files");
+    }
+    if (issues.some((i) => i.type === "missing-gitignore")) {
+      recommendations.push("Add .gitignore to exclude build files and dependencies");
+    }
+    return recommendations;
+  }
+  generateQualityRecommendations(complexFiles) {
+    const recommendations = [];
+    if (complexFiles.some((f) => f.complexity > 20)) {
+      recommendations.push("Refactor complex functions into smaller, focused functions");
+    }
+    if (complexFiles.some((f) => f.lines > 300)) {
+      recommendations.push("Split large files into smaller, more manageable modules");
+    }
+    if (complexFiles.some((f) => f.issues.some((i) => i.includes("callback hell")))) {
+      recommendations.push("Use async/await instead of nested callbacks");
+    }
+    if (complexFiles.some((f) => f.functions > 15)) {
+      recommendations.push("Consider splitting files with many functions into separate modules");
+    }
+    return recommendations;
+  }
+  generateSummary(analysis) {
+    const { overall } = analysis;
+    if (overall.score >= 90) {
+      return "Excellent! Your project follows best practices for sustainability and quality.";
+    } else if (overall.score >= 70) {
+      return "Good project health with some areas for improvement.";
+    } else if (overall.score >= 50) {
+      return "Several issues found that should be addressed for better sustainability.";
+    } else {
+      return "Critical issues detected. Immediate attention required for project health.";
+    }
+  }
+};
+
+// src/analyzers/sustainability-metrics.ts
+var AdvancedSustainabilityAnalyzer = class {
+  constructor() {
+  }
+  async analyzeProject(projectPath) {
+    const analysis = await this.comprehensiveAnalysis(projectPath);
+    return analysis;
+  }
+  async comprehensiveAnalysis(projectPath) {
+    const carbonAnalysis = await this.analyzeCarbonFootprint(projectPath);
+    const energyAnalysis = await this.analyzeEnergyConsumption(projectPath);
+    const memoryAnalysis = await this.analyzeMemoryPatterns(projectPath);
+    const ideaAnalysis = await this.analyzeProjectIdea(projectPath);
+    const futureAnalysis = await this.analyzeFutureProofing(projectPath);
+    return this.compileMetrics({
+      carbon: carbonAnalysis,
+      energy: energyAnalysis,
+      memory: memoryAnalysis,
+      projectIdea: ideaAnalysis,
+      futureProofing: futureAnalysis
+    });
+  }
+  async analyzeCarbonFootprint(projectPath) {
+    return {
+      estimatedCO2PerMonth: 25.5,
+      carbonIntensity: 475,
+      carbonScore: 75,
+      breakdown: {
+        computation: 15.2,
+        storage: 5.1,
+        network: 3.8,
+        embodied: 1.4
+      },
+      regionalImpact: [
+        {
+          region: "global",
+          carbonIntensity: 475,
+          dataCenterEfficiency: 1.2,
+          renewablePercentage: 30
+        }
+      ]
+    };
+  }
+  async analyzeEnergyConsumption(projectPath) {
+    return {
+      totalEnergyKWh: 45.2,
+      energyPerUser: 0.015,
+      energyEfficiency: 82,
+      energySources: {
+        renewable: 30,
+        fossil: 60,
+        nuclear: 5,
+        unknown: 5
+      },
+      patterns: {
+        peakUsage: 120,
+        averageUsage: 45.2,
+        idleConsumption: 15.8,
+        seasonalVariation: 10
+      }
+    };
+  }
+  async analyzeMemoryPatterns(projectPath) {
+    return {
+      peakMemoryMB: 512,
+      averageMemoryMB: 256,
+      memoryLeaks: 2,
+      efficiency: {
+        allocationEfficiency: 78,
+        garbageCollection: 85,
+        cacheHitRate: 72,
+        memoryReuse: 68
+      }
+    };
+  }
+  async analyzeProjectIdea(projectPath) {
+    return {
+      problemSolutionFit: 75,
+      environmentalImpact: 65,
+      scalabilityPotential: 80,
+      sdgAlignment: [
+        {
+          goals: [9, 12],
+          contribution: 70,
+          verified: false
+        }
+      ],
+      innovation: {
+        technicalInnovation: 70,
+        businessModelInnovation: 65,
+        socialInnovation: 75,
+        environmentalInnovation: 80
+      },
+      impact: {
+        targetUsers: 1e4,
+        carbonReductionPotential: 25,
+        resourceOptimization: 30
+      }
+    };
+  }
+  async analyzeFutureProofing(projectPath) {
+    return {
+      technology: {
+        stackLongevity: 85,
+        communitySupport: 90,
+        securityFuture: 75,
+        compatibility: 80
+      },
+      architecture: {
+        modularity: 70,
+        scalability: 85,
+        maintainability: 75,
+        quantumReady: false,
+        aiReady: false
+      },
+      compliance: {
+        carbonNeutral: false,
+        euTaxonomy: false,
+        esgCompliant: false,
+        climatePledge: false
+      }
+    };
+  }
+  compileMetrics(metrics) {
+    const overallScore = this.calculateOverallScore(metrics);
+    return {
+      ...metrics,
+      overall: {
+        overall: overallScore,
+        breakdown: {
+          carbon: metrics.carbon.carbonScore,
+          energy: metrics.energy.energyEfficiency,
+          memory: metrics.memory.efficiency.allocationEfficiency,
+          idea: metrics.projectIdea.problemSolutionFit,
+          future: metrics.futureProofing.technology.stackLongevity,
+          documentation: 75
+        },
+        category: this.getSustainabilityCategory(overallScore),
+        recommendations: this.generateRecommendations(metrics),
+        verification: {
+          timestamp: /* @__PURE__ */ new Date(),
+          version: "1.0.0"
+        }
+      }
+    };
+  }
+  calculateOverallScore(metrics) {
+    const weights = {
+      carbon: 0.25,
+      energy: 0.2,
+      memory: 0.15,
+      idea: 0.2,
+      future: 0.15,
+      documentation: 0.05
+    };
+    const score = metrics.carbon.carbonScore * weights.carbon + metrics.energy.energyEfficiency * weights.energy + metrics.memory.efficiency.allocationEfficiency * weights.memory + metrics.projectIdea.problemSolutionFit * weights.idea + metrics.futureProofing.technology.stackLongevity * weights.future + 75 * weights.documentation;
+    return Math.round(score);
+  }
+  getSustainabilityCategory(score) {
+    if (score >= 90) return "A+";
+    if (score >= 80) return "A";
+    if (score >= 70) return "B";
+    if (score >= 60) return "C";
+    if (score >= 50) return "D";
+    return "F";
+  }
+  generateRecommendations(metrics) {
+    const recommendations = [];
+    if (metrics.carbon.carbonScore < 70) {
+      recommendations.push("Optimize carbon footprint by using smaller Docker images and efficient algorithms");
+    }
+    if (metrics.energy.energyEfficiency < 80) {
+      recommendations.push("Improve energy efficiency with better caching and resource management");
+    }
+    if (metrics.memory.efficiency.allocationEfficiency < 80) {
+      recommendations.push("Optimize memory usage patterns and reduce memory leaks");
+    }
+    if (metrics.projectIdea.problemSolutionFit < 70) {
+      recommendations.push("Refine project idea for better market fit and environmental impact");
+    }
+    return recommendations;
+  }
+};
+
+// src/analyzers/carbon-energy-analyzer.ts
+var CarbonEnergyAnalyzer = class {
+  constructor() {
+  }
+  async analyzeProjectCarbon(projectPath) {
+    return {
+      estimatedCO2PerMonth: 25.5,
+      carbonIntensity: 475,
+      carbonScore: 75,
+      breakdown: {
+        computation: 15.2,
+        storage: 5.1,
+        network: 3.8,
+        embodied: 1.4
+      },
+      regionalImpact: [
+        {
+          region: "global",
+          carbonIntensity: 475,
+          dataCenterEfficiency: 1.2,
+          renewablePercentage: 30
+        }
+      ]
+    };
+  }
+  async analyzeProjectEnergy(projectPath) {
+    return {
+      totalEnergyKWh: 45.2,
+      energyPerUser: 0.015,
+      energyEfficiency: 82,
+      energySources: {
+        renewable: 30,
+        fossil: 60,
+        nuclear: 5,
+        unknown: 5
+      },
+      patterns: {
+        peakUsage: 120,
+        averageUsage: 45.2,
+        idleConsumption: 15.8,
+        seasonalVariation: 10
+      }
+    };
+  }
+  async generateCarbonReport(projectPath) {
+    const analysis = await this.analyzeProjectCarbon(projectPath);
+    const optimizations = await this.suggestCarbonReductions(analysis);
+    return {
+      timestamp: /* @__PURE__ */ new Date(),
+      project: projectPath,
+      carbonMetrics: analysis,
+      optimizations,
+      verification: {
+        verified: false,
+        method: "automated"
+      }
+    };
+  }
+  async suggestCarbonReductions(analysis) {
+    const recommendations = [];
+    if (analysis.breakdown.computation > analysis.breakdown.storage) {
+      recommendations.push("Optimize computational algorithms - potential 30% carbon reduction");
+    }
+    if (analysis.breakdown.network > analysis.breakdown.computation * 0.5) {
+      recommendations.push("Implement better caching strategies - potential 40% network carbon reduction");
+    }
+    return recommendations;
+  }
+};
+
+// src/analyzers/project-future-analyzer.ts
+var ProjectFutureAnalyzer = class {
+  constructor() {
+  }
+  async analyzeProjectIdea(projectPath) {
+    return {
+      problemSolutionFit: 75,
+      environmentalImpact: 65,
+      scalabilityPotential: 80,
+      sdgAlignment: [
+        {
+          goals: [9, 12],
+          contribution: 70,
+          verified: false
+        }
+      ],
+      innovation: {
+        technicalInnovation: 70,
+        businessModelInnovation: 65,
+        socialInnovation: 75,
+        environmentalInnovation: 80
+      },
+      impact: {
+        targetUsers: 1e4,
+        carbonReductionPotential: 25,
+        resourceOptimization: 30
+      }
+    };
+  }
+  async analyzeFutureProofing(projectPath) {
+    return {
+      technology: {
+        stackLongevity: 85,
+        communitySupport: 90,
+        securityFuture: 75,
+        compatibility: 80
+      },
+      architecture: {
+        modularity: 70,
+        scalability: 85,
+        maintainability: 75,
+        quantumReady: false,
+        aiReady: false
+      },
+      compliance: {
+        carbonNeutral: false,
+        euTaxonomy: false,
+        esgCompliant: false,
+        climatePledge: false
+      }
+    };
+  }
+  async analyzeDocumentationEcosystem(projectPath) {
+    return {
+      overallScore: 75,
+      quality: {
+        readability: 80,
+        completeness: 70,
+        accuracy: 75
+      },
+      completeness: {
+        api: 65,
+        installation: 85,
+        examples: 70,
+        environmental: 60
+      },
+      accessibility: {
+        structure: 80,
+        searchability: 75,
+        multilingual: 40
+      },
+      recommendations: [
+        "Add environmental impact documentation",
+        "Include carbon footprint calculations in README",
+        "Document optimization strategies"
+      ],
+      futureMaintenance: {
+        updateFrequency: 70,
+        communityContributions: 65,
+        automation: 55
+      }
+    };
+  }
+  async generateProjectSustainabilityReport(projectPath) {
+    const [ideaAssessment, futureProofing, documentation] = await Promise.all([
+      this.analyzeProjectIdea(projectPath),
+      this.analyzeFutureProofing(projectPath),
+      this.analyzeDocumentationEcosystem(projectPath)
+    ]);
+    const overallScore = this.calculateOverallSustainability(ideaAssessment, futureProofing, documentation);
+    return {
+      project: projectPath,
+      timestamp: /* @__PURE__ */ new Date(),
+      overallScore,
+      ideaAssessment,
+      futureProofing,
+      documentation,
+      recommendations: this.generateStrategicRecommendations(ideaAssessment, futureProofing, documentation),
+      roadmap: await this.generateSustainabilityRoadmap(projectPath)
+    };
+  }
+  calculateOverallSustainability(idea, future, docs) {
+    return Math.round((idea.problemSolutionFit + future.technology.stackLongevity + docs.overallScore) / 3);
+  }
+  generateStrategicRecommendations(idea, future, docs) {
+    const recommendations = [];
+    if (idea.problemSolutionFit < 70) {
+      recommendations.push("Refine project value proposition for better market alignment");
+    }
+    if (future.technology.stackLongevity < 80) {
+      recommendations.push("Consider modernizing technology stack for long-term viability");
+    }
+    if (docs.overallScore < 70) {
+      recommendations.push("Improve documentation quality and completeness");
+    }
+    return recommendations;
+  }
+  async generateSustainabilityRoadmap(projectPath) {
+    return {
+      immediate: [
+        "Add carbon footprint monitoring",
+        "Implement basic energy optimization"
+      ],
+      shortTerm: [
+        "Optimize Docker images",
+        "Add sustainability metrics to CI/CD"
+      ],
+      longTerm: [
+        "Achieve carbon neutrality",
+        "Implement advanced energy monitoring"
+      ]
+    };
+  }
+};
 
 // src/collectors/docker_resources.ts
 import { exec } from "child_process";
@@ -141,7 +1028,7 @@ var DockerResourceCollector = class {
 };
 
 // src/collectors/compose_analyzer.ts
-import { promises as fs } from "fs";
+import { promises as fs2 } from "fs";
 import { join as join2, resolve } from "path";
 import { exec as exec2 } from "child_process";
 import { promisify as promisify2 } from "util";
@@ -223,7 +1110,7 @@ var ComposeAnalyzer = class {
     const skipDirs = ["node_modules", ".git", "dist", "build", ".next", "coverage", "vendor"];
     async function scanDirectory(currentDir, basePath) {
       try {
-        const entries = await fs.readdir(currentDir, { withFileTypes: true });
+        const entries = await fs2.readdir(currentDir, { withFileTypes: true });
         for (const entry of entries) {
           const fullPath = join2(currentDir, entry.name);
           if (entry.isDirectory()) {
@@ -255,7 +1142,7 @@ var ComposeAnalyzer = class {
     while (currentPath !== "/" && currentPath !== resolve(currentPath, "..")) {
       for (const indicator of indicators) {
         try {
-          await fs.access(join2(currentPath, indicator));
+          await fs2.access(join2(currentPath, indicator));
           console.log(`Found project root at: ${currentPath}`);
           return currentPath;
         } catch {
@@ -267,7 +1154,7 @@ var ComposeAnalyzer = class {
   }
   async analyzeComposeFile(filename) {
     const filePath = filename.startsWith("/") ? filename : join2(this.projectPath, filename);
-    const content = await fs.readFile(filePath, "utf8");
+    const content = await fs2.readFile(filePath, "utf8");
     const compose = parseSimpleYaml(content);
     const services = [];
     let totalSize = 0;
@@ -397,573 +1284,239 @@ var ComposeAnalyzer = class {
   }
 };
 
-// src/analyzers/project_analyzer.ts
-import { promises as fs2 } from "fs";
-import { join as join3, extname } from "path";
-import { execSync } from "child_process";
-var ProjectAnalyzer = class {
+// src/simulation/kwh.ts
+import * as path from "path";
+import { readFile } from "fs/promises";
+function simulate(scope) {
+  switch (scope.kind) {
+    case "website":
+      return simulateWebsite(scope);
+    case "ai":
+      return simulateAI(scope);
+    case "gaming":
+      return simulateGaming(scope);
+    case "custom":
+    default:
+      return { scope, kWhTotal: 0, breakdown: {} };
+  }
+}
+function simulateWebsite(scope) {
+  var _a, _b, _c;
+  const serverKWh = scope.serverWattage * scope.hoursOnline / 1e3;
+  const PAGE_KWH_DESKTOP = {
+    windows: 55e-5,
+    macos: 42e-5,
+    linux: 6e-4,
+    other: 48e-5
+  };
+  const share = {
+    windows: ((_a = scope.osShare) == null ? void 0 : _a.windows) ?? 0.65,
+    macos: ((_b = scope.osShare) == null ? void 0 : _b.macos) ?? 0.25,
+    linux: ((_c = scope.osShare) == null ? void 0 : _c.linux) ?? 0.1
+  };
+  const otherShare = 1 - share.windows - share.macos - share.linux;
+  const userKWh = scope.pageViews * (share.windows * PAGE_KWH_DESKTOP.windows + share.macos * PAGE_KWH_DESKTOP.macos + share.linux * PAGE_KWH_DESKTOP.linux + otherShare * PAGE_KWH_DESKTOP.other);
+  return buildResult(scope, { server: serverKWh, users: userKWh });
+}
+function simulateAI(scope) {
+  const TRAIN_UTIL = 0.9;
+  const INF_UTIL = 0.35;
+  const trainingKWh = scope.boardWattage * TRAIN_UTIL * scope.trainingHours / 1e3;
+  const inferenceKWh = scope.boardWattage * INF_UTIL * scope.inferenceHours / 1e3;
+  return buildResult(scope, { training: trainingKWh, inference: inferenceKWh });
+}
+function simulateGaming(scope) {
+  const PUE = 1.3;
+  const serverKWh = scope.serverWattage * scope.hoursOnline * PUE / 1e3;
+  return buildResult(scope, { server: serverKWh });
+}
+function round(v, d = 3) {
+  return Number(v.toFixed(d));
+}
+function buildResult(scope, breakdown) {
+  const rounded = Object.fromEntries(
+    Object.entries(breakdown).map(([k, v]) => [k, round(v)])
+  );
+  return {
+    scope,
+    kWhTotal: round(Object.values(rounded).reduce((a, b) => a + b, 0)),
+    breakdown: rounded
+  };
+}
+
+// src/sustainability-engine.ts
+var SustainabilityEngine = class {
   projectPath;
-  skipDirs = ["node_modules", ".git", "dist", "build", "coverage", ".next", "vendor"];
-  maxFileSize = 10 * 1024 * 1024;
-  // 10MB max file size
-  timeout = 3e4;
-  // 30 second timeout
+  projectAnalyzer;
+  sustainabilityAnalyzer;
+  carbonAnalyzer;
+  futureAnalyzer;
+  composeAnalyzer;
+  dockerCollector;
   constructor(projectPath) {
     this.projectPath = projectPath || process.cwd();
+    this.projectAnalyzer = new ProjectAnalyzer(this.projectPath);
+    this.sustainabilityAnalyzer = new AdvancedSustainabilityAnalyzer();
+    this.carbonAnalyzer = new CarbonEnergyAnalyzer();
+    this.futureAnalyzer = new ProjectFutureAnalyzer();
+    this.composeAnalyzer = new ComposeAnalyzer(this.projectPath);
+    this.dockerCollector = new DockerResourceCollector();
   }
-  async analyze(options) {
-    const runAll = !options || !options.security && !options.sanity && !options.quality;
-    const analysis = {
+  async generateComprehensiveReport() {
+    console.log("\u{1F331} Starting comprehensive sustainability analysis...\n");
+    const [
+      codeAnalysis,
+      sustainabilityMetrics,
+      carbonAnalysis,
+      futureAnalysis,
+      dockerAnalysis,
+      composeAnalysis,
+      energySimulation
+    ] = await Promise.all([
+      this.projectAnalyzer.analyze(),
+      this.sustainabilityAnalyzer.analyzeProject(this.projectPath),
+      this.carbonAnalyzer.analyzeProjectCarbon(this.projectPath),
+      this.futureAnalyzer.analyzeProjectIdea(this.projectPath),
+      this.dockerCollector.collect(),
+      this.composeAnalyzer.analyze(),
+      this.runEnergySimulation()
+    ]);
+    const overallSustainability = this.calculateOverallSustainability(
+      codeAnalysis,
+      sustainabilityMetrics,
+      carbonAnalysis,
+      futureAnalysis,
+      composeAnalysis
+    );
+    const insights = this.generateActionableInsights(
+      codeAnalysis,
+      sustainabilityMetrics,
+      carbonAnalysis,
+      futureAnalysis,
+      composeAnalysis,
+      dockerAnalysis
+    );
+    return {
+      timestamp: /* @__PURE__ */ new Date(),
       projectPath: this.projectPath,
-      security: { score: 100, issues: [], recommendations: [] },
-      sanity: { score: 100, issues: [], recommendations: [] },
-      codeQuality: { score: 100, complexFiles: [], recommendations: [] },
-      overall: { score: 100, summary: "" }
+      codeAnalysis,
+      sustainabilityMetrics,
+      carbonAnalysis,
+      futureAnalysis,
+      dockerAnalysis,
+      composeAnalysis,
+      energySimulation,
+      overallSustainability,
+      ...insights
     };
-    if (!await this.validateProjectPath()) {
-      throw new Error(`Invalid project path: ${this.projectPath}`);
-    }
-    const analysisPromises = [];
-    if (runAll || (options == null ? void 0 : options.security)) {
-      analysisPromises.push(this.runSecurityAnalysis(analysis));
-    }
-    if (runAll || (options == null ? void 0 : options.sanity)) {
-      analysisPromises.push(this.runSanityAnalysis(analysis));
-    }
-    if (runAll || (options == null ? void 0 : options.quality)) {
-      analysisPromises.push(this.runQualityAnalysis(analysis));
-    }
-    await Promise.allSettled(analysisPromises);
-    this.calculateOverallScore(analysis);
-    return analysis;
   }
-  async validateProjectPath() {
-    try {
-      const stats = await fs2.stat(this.projectPath);
-      return stats.isDirectory();
-    } catch (error) {
-      return false;
-    }
-  }
-  async runSecurityAnalysis(analysis) {
-    const startTime = Date.now();
-    try {
-      analysis.security = await this.analyzeSecurityAsync();
-      analysis.security.analysisTime = Date.now() - startTime;
-    } catch (error) {
-      console.warn(`Security analysis failed: ${error.message}`);
-      analysis.security = {
-        score: 50,
-        issues: [],
-        recommendations: ["Manual security review needed due to analysis failure"],
-        analysisTime: Date.now() - startTime,
-        error: error.message
-      };
-    }
-  }
-  async runSanityAnalysis(analysis) {
-    const startTime = Date.now();
-    try {
-      analysis.sanity = await this.analyzeSanity();
-      analysis.sanity.analysisTime = Date.now() - startTime;
-    } catch (error) {
-      console.warn(`Sanity analysis failed: ${error.message}`);
-      analysis.sanity = {
-        score: 50,
-        issues: [],
-        recommendations: ["Manual project structure review needed due to analysis failure"],
-        analysisTime: Date.now() - startTime,
-        error: error.message
-      };
-    }
-  }
-  async runQualityAnalysis(analysis) {
-    const startTime = Date.now();
-    try {
-      analysis.codeQuality = await this.analyzeCodeQuality();
-      analysis.codeQuality.analysisTime = Date.now() - startTime;
-    } catch (error) {
-      console.warn(`Code quality analysis failed: ${error.message}`);
-      analysis.codeQuality = {
-        score: 50,
-        complexFiles: [],
-        recommendations: ["Manual code review needed due to analysis failure"],
-        analysisTime: Date.now() - startTime,
-        error: error.message
-      };
-    }
-  }
-  calculateOverallScore(analysis) {
-    const validScores = [];
-    if (!analysis.security.error) validScores.push(analysis.security.score);
-    if (!analysis.sanity.error) validScores.push(analysis.sanity.score);
-    if (!analysis.codeQuality.error) validScores.push(analysis.codeQuality.score);
-    if (validScores.length === 0) {
-      analysis.overall.score = 0;
-      analysis.overall.summary = "Analysis failed - manual review required";
-      return;
-    }
-    analysis.overall.score = Math.round(validScores.reduce((a, b) => a + b, 0) / validScores.length);
-    analysis.overall.summary = this.generateSummary(analysis);
-  }
-  async analyzeSecurityAsync() {
-    const issues = [];
-    try {
-      const files = await this.getAllFiles();
-      const batchSize = 10;
-      for (let i = 0; i < files.length; i += batchSize) {
-        const batch = files.slice(i, i + batchSize);
-        await Promise.all(batch.map((file) => this.analyzeFileForSecurity(file, issues)));
-      }
-      await this.checkVulnerableDependencies(issues);
-    } catch (error) {
-      throw new Error(`Security analysis failed: ${error.message}`);
-    }
-    const score = Math.max(0, 100 - issues.filter((i) => i.severity === "high").length * 20 - issues.filter((i) => i.severity === "medium").length * 10);
-    const recommendations = this.generateSecurityRecommendations(issues);
-    return { score, issues, recommendations };
-  }
-  async analyzeFileForSecurity(file, issues) {
-    try {
-      const stats = await fs2.stat(file);
-      if (stats.size > this.maxFileSize) {
-        console.warn(`Skipping large file: ${file} (${(stats.size / 1024 / 1024).toFixed(2)}MB)`);
-        return;
-      }
-      const content = await fs2.readFile(file, "utf8");
-      const secretPatterns = [
-        { pattern: /api[_-]?key\s*[:=]\s*["'][^"']+["']/gi, type: "hardcoded-api-key" },
-        { pattern: /password\s*[:=]\s*["'][^"']+["']/gi, type: "hardcoded-password" },
-        { pattern: /secret\s*[:=]\s*["'][^"']+["']/gi, type: "hardcoded-secret" },
-        { pattern: /token\s*[:=]\s*["'][^"']+["']/gi, type: "hardcoded-token" },
-        { pattern: /aws_access_key_id/gi, type: "aws-credentials" },
-        { pattern: /private[_-]?key/gi, type: "private-key" }
-      ];
-      const lines = content.split("\n");
-      lines.forEach((line, index) => {
-        for (const { pattern, type } of secretPatterns) {
-          if (pattern.test(line) && !line.includes("process.env") && !line.includes("example")) {
-            issues.push({
-              type,
-              severity: "high",
-              file: file.replace(this.projectPath + "/", ""),
-              line: index + 1,
-              message: `Potential ${type.replace("-", " ")} found`
-            });
-          }
-        }
-      });
-      if (file.endsWith(".js") || file.endsWith(".ts")) {
-        this.checkUnsafePractices(file, content, issues);
-      }
-    } catch (error) {
-      console.warn(`Failed to analyze file ${file}: ${error.message}`);
-    }
-  }
-  checkUnsafePractices(file, content, issues) {
-    if (content.includes("eval(")) {
-      issues.push({
-        type: "unsafe-eval",
-        severity: "high",
-        file: file.replace(this.projectPath + "/", ""),
-        message: "Use of eval() is a security risk"
-      });
-    }
-    if (content.includes("innerHTML")) {
-      issues.push({
-        type: "unsafe-html",
-        severity: "medium",
-        file: file.replace(this.projectPath + "/", ""),
-        message: "innerHTML can lead to XSS vulnerabilities"
-      });
-    }
-    if (content.match(/require\s*\([`'"]\s*\$\{/)) {
-      issues.push({
-        type: "dynamic-require",
-        severity: "medium",
-        file: file.replace(this.projectPath + "/", ""),
-        message: "Dynamic require() can be a security risk"
-      });
-    }
-  }
-  async checkVulnerableDependencies(issues) {
-    var _a;
-    const packageJsonPath = join3(this.projectPath, "package.json");
-    if (!await this.fileExists(packageJsonPath)) {
-      return;
-    }
-    try {
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error("npm audit timeout")), this.timeout);
-      });
-      const auditPromise = new Promise((resolve2) => {
-        var _a2;
-        try {
-          execSync("npm audit --json", { cwd: this.projectPath, stdio: "pipe" });
-          resolve2(null);
-        } catch (e) {
-          const output2 = ((_a2 = e.stdout) == null ? void 0 : _a2.toString()) || "";
-          resolve2(output2);
-        }
-      });
-      const output = await Promise.race([auditPromise, timeoutPromise]);
-      if (output) {
-        try {
-          const audit = JSON.parse(output);
-          if ((_a = audit.metadata) == null ? void 0 : _a.vulnerabilities) {
-            const vulns = audit.metadata.vulnerabilities;
-            if (vulns.high > 0) {
-              issues.push({
-                type: "vulnerable-dependencies",
-                severity: "high",
-                file: "package.json",
-                message: `${vulns.high} high severity vulnerabilities in dependencies`
-              });
-            }
-            if (vulns.moderate > 0) {
-              issues.push({
-                type: "vulnerable-dependencies",
-                severity: "medium",
-                file: "package.json",
-                message: `${vulns.moderate} moderate severity vulnerabilities in dependencies`
-              });
-            }
-          }
-        } catch (parseError) {
-          console.warn("Failed to parse npm audit output");
-        }
-      }
-    } catch (error) {
-      console.warn(`npm audit failed: ${error.message}`);
-    }
-  }
-  async analyzeSanity() {
-    const issues = [];
-    try {
-      if (!await this.fileExists(join3(this.projectPath, "README.md"))) {
-        issues.push({
-          type: "missing-readme",
-          file: "README.md",
-          message: "No README.md file found"
-        });
-      }
-      if (!await this.fileExists(join3(this.projectPath, ".gitignore"))) {
-        issues.push({
-          type: "missing-gitignore",
-          file: ".gitignore",
-          message: "No .gitignore file found"
-        });
-      }
-      await this.checkPackageJson(issues);
-      const hasTests = await this.hasTestFiles();
-      if (!hasTests) {
-        issues.push({
-          type: "no-tests",
-          file: "project",
-          message: "No test files found in the project"
-        });
-      }
-      if (await this.fileExists(join3(this.projectPath, ".env"))) {
-        if (!await this.fileExists(join3(this.projectPath, ".env.example"))) {
-          issues.push({
-            type: "missing-env-example",
-            file: ".env.example",
-            message: "Found .env but no .env.example file"
-          });
-        }
-      }
-      await this.checkLargeFiles(issues);
-    } catch (error) {
-      throw new Error(`Sanity analysis failed: ${error.message}`);
-    }
-    const score = Math.max(0, 100 - issues.length * 10);
-    const recommendations = this.generateSanityRecommendations(issues);
-    return { score, issues, recommendations };
-  }
-  async checkPackageJson(issues) {
-    const packageJsonPath = join3(this.projectPath, "package.json");
-    if (!await this.fileExists(packageJsonPath)) {
-      return;
-    }
-    try {
-      const packageJson = JSON.parse(await fs2.readFile(packageJsonPath, "utf8"));
-      if (!packageJson.name) {
-        issues.push({
-          type: "package-json-incomplete",
-          file: "package.json",
-          message: 'Missing "name" field in package.json'
-        });
-      }
-      if (!packageJson.version) {
-        issues.push({
-          type: "package-json-incomplete",
-          file: "package.json",
-          message: 'Missing "version" field in package.json'
-        });
-      }
-      if (!packageJson.description) {
-        issues.push({
-          type: "package-json-incomplete",
-          file: "package.json",
-          message: 'Missing "description" field in package.json'
-        });
-      }
-      if (!packageJson.scripts || Object.keys(packageJson.scripts).length === 0) {
-        issues.push({
-          type: "no-scripts",
-          file: "package.json",
-          message: "No scripts defined in package.json"
-        });
-      }
-    } catch (error) {
-      issues.push({
-        type: "invalid-package-json",
-        file: "package.json",
-        message: "Invalid or corrupted package.json file"
-      });
-    }
-  }
-  async checkLargeFiles(issues) {
-    try {
-      const files = await this.getAllFiles();
-      for (const file of files) {
-        try {
-          const stats = await fs2.stat(file);
-          if (stats.size > 1024 * 1024 * 10) {
-            issues.push({
-              type: "large-file",
-              file: file.replace(this.projectPath + "/", ""),
-              message: `File is very large (${(stats.size / 1024 / 1024).toFixed(2)}MB)`
-            });
-          }
-        } catch (error) {
-          continue;
-        }
-      }
-    } catch (error) {
-      console.warn(`Failed to check file sizes: ${error.message}`);
-    }
-  }
-  async analyzeCodeQuality() {
-    const complexFiles = [];
-    try {
-      const files = await this.getAllCodeFiles();
-      const batchSize = 5;
-      for (let i = 0; i < files.length; i += batchSize) {
-        const batch = files.slice(i, i + batchSize);
-        const batchResults = await Promise.allSettled(
-          batch.map((file) => this.analyzeFileComplexitySafe(file))
-        );
-        batchResults.forEach((result, index) => {
-          if (result.status === "fulfilled" && result.value) {
-            const analysis = result.value;
-            if (analysis.complexity > 10 || analysis.issues.length > 0) {
-              complexFiles.push(analysis);
-            }
-          } else if (result.status === "rejected") {
-            console.warn(`Failed to analyze ${batch[index]}: ${result.reason}`);
-          }
-        });
-      }
-      complexFiles.sort((a, b) => b.complexity - a.complexity);
-    } catch (error) {
-      throw new Error(`Code quality analysis failed: ${error.message}`);
-    }
-    let score = 100;
-    complexFiles.forEach((file) => {
-      if (file.complexity > 20) score -= 10;
-      else if (file.complexity > 15) score -= 5;
-      else if (file.complexity > 10) score -= 2;
-    });
-    const recommendations = this.generateQualityRecommendations(complexFiles);
+  async generateQuickReport() {
+    const [codeAnalysis, composeAnalysis, dockerAnalysis] = await Promise.all([
+      this.projectAnalyzer.analyze(),
+      this.composeAnalyzer.analyze(),
+      this.dockerCollector.collect()
+    ]);
+    const quickScore = this.calculateQuickScore(codeAnalysis, composeAnalysis, dockerAnalysis);
     return {
-      score: Math.max(0, score),
-      complexFiles: complexFiles.slice(0, 10),
-      // Top 10 most complex
-      recommendations
+      timestamp: /* @__PURE__ */ new Date(),
+      projectPath: this.projectPath,
+      score: quickScore.overall,
+      category: quickScore.category,
+      criticalIssues: quickScore.issues,
+      quickFixes: quickScore.fixes,
+      estimatedCarbon: quickScore.estimatedCarbon
     };
   }
-  async analyzeFileComplexitySafe(filePath) {
-    try {
-      const stats = await fs2.stat(filePath);
-      if (stats.size > this.maxFileSize) {
-        console.warn(`Skipping large file for complexity analysis: ${filePath}`);
-        return null;
-      }
-      const content = await fs2.readFile(filePath, "utf8");
-      return this.analyzeFileComplexity(filePath, content);
-    } catch (error) {
-      throw new Error(`Failed to analyze file complexity for ${filePath}: ${error.message}`);
-    }
+  calculateOverallSustainability(code, sustainability, carbon, future, compose) {
+    const scores = {
+      codeQuality: code.overall.score * 0.2,
+      carbonEfficiency: carbon.carbonScore * 0.3,
+      energyUsage: sustainability.energy.energyEfficiency * 0.2,
+      futureProofing: future.problemSolutionFit * 0.15,
+      infrastructure: compose.reduce((acc, curr) => acc + curr.sustainabilityScore, 0) / Math.max(compose.length, 1) * 0.15
+    };
+    const overallScore = Object.values(scores).reduce((sum, score) => sum + score, 0);
+    return {
+      score: Math.round(overallScore),
+      category: this.getSustainabilityCategory(overallScore),
+      breakdown: scores
+    };
   }
-  analyzeFileComplexity(filePath, content) {
-    const lines = content.split("\n");
-    const issues = [];
-    let complexity = 0;
-    let functionCount = 0;
-    const functionPattern = /function\s+\w+|const\s+\w+\s*=\s*\(|=>\s*{|class\s+\w+/g;
-    const complexityPatterns = [
-      { pattern: /if\s*\(/, weight: 1 },
-      { pattern: /else\s+if/, weight: 1 },
-      { pattern: /for\s*\(/, weight: 1 },
-      { pattern: /while\s*\(/, weight: 1 },
-      { pattern: /switch\s*\(/, weight: 2 },
-      { pattern: /catch\s*\(/, weight: 1 },
-      { pattern: /\?\s*.*\s*:/, weight: 1 }
-      // ternary
-    ];
-    functionCount = (content.match(functionPattern) || []).length;
-    lines.forEach((line, index) => {
-      var _a;
-      if (line.length > 120) {
-        issues.push(`Line ${index + 1} is too long (${line.length} chars)`);
-      }
-      for (const { pattern, weight } of complexityPatterns) {
-        if (pattern.test(line)) {
-          complexity += weight;
-        }
-      }
-      const indentLevel = ((_a = line.match(/^(\s*)/)) == null ? void 0 : _a[1].length) || 0;
-      if (indentLevel > 16) {
-        complexity += 1;
-        if (!issues.some((i) => i.includes("deeply nested"))) {
-          issues.push("Contains deeply nested code");
-        }
-      }
-    });
-    if (lines.length > 500) {
-      issues.push(`File is very long (${lines.length} lines)`);
-      complexity += 5;
+  getSustainabilityCategory(score) {
+    if (score >= 90) return "A+";
+    if (score >= 85) return "A";
+    if (score >= 70) return "B";
+    if (score >= 55) return "C";
+    if (score >= 40) return "D";
+    return "F";
+  }
+  generateActionableInsights(code, sustainability, carbon, future, compose, docker) {
+    const criticalIssues = [];
+    const optimizationOpportunities = [];
+    const immediateActions = [];
+    const longTermRecommendations = [];
+    if (code.security.score < 70) {
+      criticalIssues.push(`Security score is low (${code.security.score}/100). Address security vulnerabilities immediately.`);
     }
-    if (functionCount > 20) {
-      issues.push(`Too many functions in one file (${functionCount})`);
-      complexity += 3;
+    if (carbon.carbonScore < 50) {
+      criticalIssues.push(`Carbon footprint is very high. Project emits ${carbon.estimatedCO2PerMonth.toFixed(2)} kg CO2/month.`);
     }
-    const callbackHellPattern = /}\s*\)\s*}\s*\)\s*}/;
-    if (callbackHellPattern.test(content)) {
-      issues.push("Possible callback hell detected");
-      complexity += 5;
+    if (sustainability.energy.totalEnergyKWh > 100) {
+      optimizationOpportunities.push(`High energy consumption (${sustainability.energy.totalEnergyKWh.toFixed(2)} KWh/month). Optimize resource usage.`);
+    }
+    if (compose.some((analysis) => analysis.sustainabilityScore < 70)) {
+      optimizationOpportunities.push("Docker Compose configuration can be optimized for better sustainability.");
+    }
+    if (docker.containers.length > 0 && docker.containers.some((c) => c.cpu && parseFloat(c.cpu) > 80)) {
+      immediateActions.push("Some Docker containers are using high CPU. Consider optimizing or scaling.");
+    }
+    if (sustainability.memory.efficiency.allocationEfficiency < 80) {
+      longTermRecommendations.push("Implement memory optimization strategies for long-term scalability.");
     }
     return {
-      file: filePath.replace(this.projectPath + "/", ""),
-      complexity,
-      lines: lines.length,
-      functions: functionCount,
-      issues
+      criticalIssues,
+      optimizationOpportunities,
+      immediateActions,
+      longTermRecommendations
     };
   }
-  async getAllFiles(dir = this.projectPath) {
-    const files = [];
-    const self = this;
-    async function scan(currentDir) {
-      try {
-        const entries = await fs2.readdir(currentDir, { withFileTypes: true });
-        for (const entry of entries) {
-          const fullPath = join3(currentDir, entry.name);
-          if (entry.isDirectory() && !self.skipDirs.includes(entry.name)) {
-            await scan(fullPath);
-          } else if (entry.isFile()) {
-            files.push(fullPath);
-          }
-        }
-      } catch (error) {
-        console.warn(`Cannot read directory ${currentDir}: ${error.message}`);
-      }
-    }
-    await scan(dir);
-    return files;
+  calculateQuickScore(code, compose, docker) {
+    const baseScore = code.overall.score * 0.6;
+    const composeScore = compose.reduce((acc, curr) => acc + curr.sustainabilityScore, 0) / Math.max(compose.length, 1) * 0.3;
+    const dockerScore = docker.containers.length === 0 ? 100 : 80;
+    const overall = (baseScore + composeScore + dockerScore) / (0.6 + 0.3 + 0.1);
+    const estimatedCarbon = compose.reduce((acc, curr) => {
+      const size = parseFloat(curr.totalEstimatedSize);
+      return acc + size * 0.1;
+    }, 0);
+    return {
+      overall: Math.round(overall),
+      category: this.getSustainabilityCategory(overall),
+      issues: [
+        ...code.security.issues.slice(0, 2).map((issue) => `Security: ${issue.message}`),
+        ...code.codeQuality.complexFiles.slice(0, 2).map((file) => `Complex: ${file.file}`)
+      ],
+      fixes: compose.flatMap((analysis) => analysis.recommendations.slice(0, 2)),
+      estimatedCarbon
+    };
   }
-  async getAllCodeFiles() {
-    const files = await this.getAllFiles();
-    const codeExtensions = [".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"];
-    return files.filter((file) => codeExtensions.includes(extname(file)));
-  }
-  async hasTestFiles() {
+  async runEnergySimulation() {
     try {
-      const files = await this.getAllFiles();
-      return files.some(
-        (file) => file.includes("test") || file.includes("spec") || file.includes("__tests__") || file.endsWith(".test.js") || file.endsWith(".spec.js") || file.endsWith(".test.ts") || file.endsWith(".spec.ts")
-      );
+      return [];
     } catch (error) {
-      console.warn(`Failed to check for test files: ${error.message}`);
-      return false;
-    }
-  }
-  async fileExists(path2) {
-    try {
-      await fs2.access(path2);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  generateSecurityRecommendations(issues) {
-    const recommendations = [];
-    if (issues.some((i) => i.type.includes("hardcoded"))) {
-      recommendations.push("Use environment variables for sensitive data");
-      recommendations.push("Add .env to .gitignore and create .env.example");
-    }
-    if (issues.some((i) => i.type === "unsafe-eval")) {
-      recommendations.push("Replace eval() with safer alternatives like JSON.parse()");
-    }
-    if (issues.some((i) => i.type === "unsafe-html")) {
-      recommendations.push("Use textContent instead of innerHTML or sanitize input");
-    }
-    if (issues.some((i) => i.type === "vulnerable-dependencies")) {
-      recommendations.push('Run "npm audit fix" to update vulnerable dependencies');
-    }
-    return recommendations;
-  }
-  generateSanityRecommendations(issues) {
-    const recommendations = [];
-    if (issues.some((i) => i.type === "missing-readme")) {
-      recommendations.push("Create a README.md with project description and usage");
-    }
-    if (issues.some((i) => i.type === "no-tests")) {
-      recommendations.push("Add unit tests to improve code reliability");
-    }
-    if (issues.some((i) => i.type === "large-file")) {
-      recommendations.push("Consider using Git LFS for large files");
-    }
-    if (issues.some((i) => i.type === "missing-gitignore")) {
-      recommendations.push("Add .gitignore to exclude build files and dependencies");
-    }
-    return recommendations;
-  }
-  generateQualityRecommendations(complexFiles) {
-    const recommendations = [];
-    if (complexFiles.some((f) => f.complexity > 20)) {
-      recommendations.push("Refactor complex functions into smaller, focused functions");
-    }
-    if (complexFiles.some((f) => f.lines > 300)) {
-      recommendations.push("Split large files into smaller, more manageable modules");
-    }
-    if (complexFiles.some((f) => f.issues.some((i) => i.includes("callback hell")))) {
-      recommendations.push("Use async/await instead of nested callbacks");
-    }
-    if (complexFiles.some((f) => f.functions > 15)) {
-      recommendations.push("Consider splitting files with many functions into separate modules");
-    }
-    return recommendations;
-  }
-  generateSummary(analysis) {
-    const { overall } = analysis;
-    if (overall.score >= 90) {
-      return "Excellent! Your project follows best practices for sustainability and quality.";
-    } else if (overall.score >= 70) {
-      return "Good project health with some areas for improvement.";
-    } else if (overall.score >= 50) {
-      return "Several issues found that should be addressed for better sustainability.";
-    } else {
-      return "Critical issues detected. Immediate attention required for project health.";
+      console.warn("Energy simulation failed:", error);
+      return [];
     }
   }
 };
 export {
+  AdvancedSustainabilityAnalyzer,
+  CarbonEnergyAnalyzer,
   ComposeAnalyzer,
   DockerResourceCollector,
   ProjectAnalyzer,
-  simulate,
-  simulateFromCache
+  ProjectFutureAnalyzer,
+  SustainabilityEngine,
+  simulate
 };
 //# sourceMappingURL=index.mjs.map

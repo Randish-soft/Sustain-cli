@@ -2,17 +2,19 @@ import { defineConfig } from 'tsup';
 
 export default defineConfig({
   entry: ['src/index.ts'],
-  format: ['cjs', 'esm'],
+  format: ['esm', 'cjs'],
   dts: true,
   splitting: false,
   sourcemap: true,
   clean: true,
-  outDir: 'dist',
+  treeshake: true,
+  // Add these to ensure proper exports
+  bundle: true,
+  minify: false,
+  skipNodeModulesBundle: true,
   target: 'node16',
-  external: ['dockerode'],
-  outExtension({ format }) {
-    return {
-      js: format === 'esm' ? '.mjs' : '.js'
-    }
-  }
+  platform: 'node',
+  // Ensure all exports are preserved
+  noExternal: [],
+  external: []
 });
